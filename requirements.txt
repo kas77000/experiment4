@@ -1,0 +1,6 @@
+# Phase 1 (empirical percentile bands) needs only these:
+pandas>=2.0
+numpy>=1.24
+
+# Phase 2 (regression / quantile-regression cost model) will add:
+# statsmodels>=0.14
