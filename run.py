@@ -4,8 +4,8 @@
     python run.py --csv path.csv  # run on your real extract (via config COLUMN_MAP)
 
 Outputs:
-    outputs/threshold_table.csv   # the bands per algo x market x bucket
-    outputs/scored_orders.csv     # every order tagged GREEN/GREY/RED + flagged
+    outputs/threshold_table.csv   # the range per algo x market x bucket
+    outputs/scored_orders.csv     # every order tagged IN_RANGE/OUT_LOW/OUT_HIGH + flagged
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def main():
 
     # 2) fit thresholds
     table = thresholds.fit(df, cfg)
-    print("\n=== Threshold table (bands in units of spread) ===")
+    print("\n=== Threshold table (range in units of spread) ===")
     print(report.format_threshold_table(table))
 
     n_untrusted = int((~table["trusted"]).sum())

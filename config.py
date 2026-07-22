@@ -55,12 +55,12 @@ class Config:
     adv_bucket_edges: tuple = (0.0, 1.0, 5.0, 10.0, 20.0, float("inf"))
     adv_bucket_labels: tuple = ("<1%", "1-5%", "5-10%", "10-20%", ">20%")
 
-    # --- the bands (percentiles of perf_in_spreads within each group) ---
-    # RED beyond the outer pair, GREY between, GREEN inside the inner pair.
-    # Two-sided by construction: the lower RED tail = underperformance,
-    # the upper RED tail = suspiciously good (data/benchmark errors, lucky fills).
-    red_percentiles: tuple = (10.0, 90.0)    # outside -> RED (flagged)
-    grey_percentiles: tuple = (25.0, 75.0)   # inside  -> GREEN; between -> GREY
+    # --- the threshold range (percentiles of perf_in_spreads within each group) ---
+    # Orders INSIDE the range are acceptable; anything OUTSIDE is flagged as wrong
+    # and must be justified. Two-sided by construction: below the lower bound =
+    # underperformance, above the upper bound = suspiciously good (data/benchmark
+    # errors, lucky fills).
+    range_percentiles: tuple = (10.0, 90.0)  # inside -> OK; outside -> flagged
 
     # --- robustness ---
     # Minimum orders needed to trust a group's bands. Groups thinner than this

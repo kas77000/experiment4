@@ -16,28 +16,23 @@ import pandas as pd
 from tca import schema
 
 # Zone labels
-GREEN = "GREEN"
-GREY_LOW = "GREY_LOW"
-GREY_HIGH = "GREY_HIGH"
-RED_LOW = "RED_LOW"     # underperformance -> flag
-RED_HIGH = "RED_HIGH"   # suspiciously good -> flag
-FLAGGED = {RED_LOW, RED_HIGH}
+IN_RANGE = "IN_RANGE"    # inside the threshold range -> acceptable
+OUT_LOW = "OUT_LOW"      # below range: underperformance -> flag / justify
+OUT_HIGH = "OUT_HIGH"    # above range: suspiciously good -> flag / justify
+FLAGGED = {OUT_LOW, OUT_HIGH}
 
 
 def _band_row(perf: np.ndarray, cfg) -> dict:
-    """Compute the five cut points + summary stats for one group's perf array."""
-    lo_red, hi_red = cfg.red_percentiles
-    lo_grey, hi_grey = cfg.grey_percentiles
-    q = np.nanpercentile(perf, [lo_red, lo_grey, 50.0, hi_grey, hi_red])
+    """Compute the range bounds + summary stats for one group's perf array."""
+    lo, hi = cfg.range_percentiles
+    q = np.nanpercentile(perf, [lo, 50.0, hi])
     med = float(np.nanmedian(perf))
     mad = float(np.nanmedian(np.abs(perf - med)))  # robust dispersion
     return {
         "n": int(np.sum(~np.isnan(perf))),
-        "q_red_lo": float(q[0]),
-        "q_grey_lo": float(q[1]),
-        "q_median": float(q[2]),
-        "q_grey_hi": float(q[3]),
-        "q_red_hi": float(q[4]),
+        "q_lo": float(q[0]),
+        "q_median": float(q[1]),
+        "q_hi": float(q[2]),
         "mad_spreads": mad,
     }
 
@@ -68,8 +63,7 @@ def fit(df: pd.DataFrame, cfg) -> pd.DataFrame:
     rows.append(row)
 
     cols = ["level", schema.ALGO, schema.MARKET, schema.ADV_BUCKET, "n",
-            "q_red_lo", "q_grey_lo", "q_median", "q_grey_hi", "q_red_hi",
-            "mad_spreads"]
+            "q_lo", "q_median", "q_hi", "mad_spreads"]
     out = pd.DataFrame(rows)[cols]
     out["trusted"] = out["n"] >= cfg.min_group_n
     return out.sort_values(["level", schema.ALGO, schema.MARKET, schema.ADV_BUCKET]) \
@@ -77,16 +71,16 @@ def fit(df: pd.DataFrame, cfg) -> pd.DataFrame:
 
 
 def classify(perf: float, band: pd.Series) -> str:
-    """Map a normalized performance to a zone given one band row."""
-    if perf < band["q_red_lo"]:
-        return RED_LOW
-    if perf > band["q_red_hi"]:
-        return RED_HIGH
-    if perf < band["q_grey_lo"]:
-        return GREY_LOW
-    if perf > band["q_grey_hi"]:
-        return GREY_HIGH
-    return GREEN
+    """Map a normalized performance to a zone given one band row.
+
+    Inside the range is acceptable; anything outside is flagged and must be
+    justified.
+    """
+    if perf < band["q_lo"]:
+        return OUT_LOW
+    if perf > band["q_hi"]:
+        return OUT_HIGH
+    return IN_RANGE
 
 
 class ThresholdModel:
