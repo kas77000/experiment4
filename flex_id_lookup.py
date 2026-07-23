@@ -9,8 +9,11 @@ The original workbook is opened with openpyxl and only ONE new column is added,
 so every existing cell (values, styles, number formats, formulas) is preserved
 byte-for-byte in the output file.
 
-Rows that resolve to exactly one kdb match get their FLEX ID.
-Rows with zero or several matches are left blank in the xlsx AND listed in a
+Excel rows are grouped by their match key. A group is filled in when kdb returns
+exactly as many matches as there are Excel rows in it — the FLEX IDs are paired
+to those rows in order (the rows are identical on the key, so the pairing is
+arbitrary, but every row still gets a distinct FLEX ID). Groups where the counts
+differ (including no match at all) are left blank in the xlsx AND listed in a
 conflicts CSV so they can be resolved by hand.
 
 Usage
@@ -217,6 +220,11 @@ def main() -> int:
     conflicts = []
     n_matched = n_conflict = n_skipped = 0
 
+    # Pass 1: group Excel rows by their match key. Rows that share a key are
+    # indistinguishable, so we build the query once per group and query once.
+    # The rendered query string IS the group key — rows that render identically
+    # match identically. Each member keeps its row number + raw cells for output.
+    groups: dict[str, list] = {}
     for row in range(HEADER_ROW + 1, ws.max_row + 1):
         d = ws.cell(row=row, column=c_date).value
         s = ws.cell(row=row, column=c_sym).value
@@ -225,14 +233,14 @@ def main() -> int:
         ot = ws.cell(row=row, column=c_otype).value
         al = ws.cell(row=row, column=c_algo).value
 
-        key = (d, s, q, sd, ot, al)
+        cells = [d, s, q, sd, ot, al]
         # Skip fully blank rows.
-        if all(v is None for v in key):
+        if all(v is None for v in cells):
             continue
         # Skip rows missing any key field (can't match on partial keys).
-        if any(v is None for v in key):
+        if any(v is None for v in cells):
             n_skipped += 1
-            conflicts.append([row, d, s, q, sd, ot, al, "incomplete-row", ""])
+            conflicts.append([row, *cells, "incomplete-row", ""])
             continue
 
         try:
@@ -244,23 +252,42 @@ def main() -> int:
                 otype=q_otype(ot),
                 algo=q_sym(al),
             )
+        except Exception as exc:  # noqa: BLE001 - bad cell value, report and skip
+            n_skipped += 1
+            conflicts.append([row, *cells, f"bad-value: {exc}", ""])
+            continue
+
+        groups.setdefault(query, []).append((row, cells))
+
+    # Pass 2: run each group's query once. When kdb returns exactly as many rows
+    # as the group has Excel rows, pair FLEX IDs to rows in order — the rows are
+    # identical on the key so the pairing is arbitrary, but every row still gets
+    # a distinct FLEX ID. Otherwise the whole group goes to the conflicts file.
+    for query, members in groups.items():
+        try:
             res = conn(query).pd()
         except Exception as exc:  # noqa: BLE001 - report and keep going
-            n_skipped += 1
-            conflicts.append([row, d, s, q, sd, ot, al, f"query-error: {exc}", ""])
+            n_skipped += len(members)
+            for row, cells in members:
+                conflicts.append([row, *cells, f"query-error: {exc}", ""])
             continue
 
         flex_values = [qstr(v) for v in res["flex"].tolist()] if "flex" in res else []
-        n = len(res)
+        n_kdb = len(flex_values)
+        n_excel = len(members)
 
-        if n == 1:
-            ws.cell(row=row, column=new_col, value=flex_values[0])
-            n_matched += 1
+        if n_kdb == n_excel:
+            for (row, _cells), flex in zip(members, flex_values):
+                ws.cell(row=row, column=new_col, value=flex)
+                n_matched += 1
         else:
-            # 0 or >1 matches -> leave FLEX ID blank, record for manual review.
-            n_conflict += 1
-            reason = "no-match" if n == 0 else f"multiple({n})"
-            conflicts.append([row, d, s, q, sd, ot, al, reason, " | ".join(flex_values)])
+            # Count mismatch (including no match at all) -> leave FLEX ID blank,
+            # record every row in the group for manual review.
+            reason = ("no-match" if n_kdb == 0
+                      else f"count-mismatch(excel={n_excel},kdb={n_kdb})")
+            for row, cells in members:
+                n_conflict += 1
+                conflicts.append([row, *cells, reason, " | ".join(flex_values)])
 
     wb.save(out_path)
     print(f"Wrote {out_path}  (matched={n_matched}, conflicts={n_conflict}, skipped={n_skipped})")
