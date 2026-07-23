@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Read an Excel table (header on row 2, columns: Date, Symbol, Order Qty, Side),
-look each row up in a kdb+ `target` table via pykx, extract FIX tag 9603 from the
-`fixmsg` column, and write a new xlsx with an added `FLEX ID` column.
+Read an Excel table (header on row 2, columns: Date, Symbol, Order Qty, Side,
+Order Type, ClientAlgo), look each row up in a kdb+ `target` table via pykx,
+extract FIX tag 9603 from the `fixmsg` column, and write a new xlsx with an
+added `FLEX ID` column.
 
 The original workbook is opened with openpyxl and only ONE new column is added,
 so every existing cell (values, styles, number formats, formulas) is preserved
@@ -57,6 +58,8 @@ COL_DATE = "Date"
 COL_SYMBOL = "Symbol"
 COL_QTY = "Order Qty"
 COL_SIDE = "Side"
+COL_OTYPE = "Order Type"   # limit price (a number) for limits, "Market" for market orders
+COL_ALGO = "ClientAlgo"    # maps straight to kdb `algo`
 
 # Row (1-indexed) that holds the column headers.
 HEADER_ROW = 2
@@ -83,10 +86,11 @@ getTag:{[tag;msg]
 # lambda's arguments. FLEX is extracted server-side via getTag so we never ship
 # whole fix messages back over the wire.
 QUERY_TEMPLATE = (
-    "select date,sym,size,side,basket,"
+    "select date,sym,size,side,otype,algo,basket,"
     'flex:getTag["' + FIX_TAG + '";] each fixmsg '
     "from " + TARGET_TABLE + " "
     'where date={date}, sym={sym}, size={size}, side={side}, '
+    "otype={otype}, algo={algo}, "
     'basket like "*ARROWP*"'
 )
 
@@ -133,6 +137,22 @@ def q_side(value) -> str:
     return "`" + v            # q symbol literal, e.g. `buy
 
 
+def q_otype(value) -> str:
+    """Translate the Excel 'Order Type' to the kdb otype symbol.
+
+    A limit order carries a limit price (a number) in that cell, whereas a market
+    order carries the text 'Market'. So a numeric value -> `limit, and 'Market'
+    -> `market. Anything else is rejected so it lands in the conflicts file."""
+    raw = str(value).strip()
+    if raw.upper() == "MARKET":
+        return "`market"
+    try:
+        float(raw.replace(",", ""))  # a limit price (tolerate thousands commas)
+    except ValueError:
+        raise ValueError(f"Unrecognised Order Type (expected a limit price or 'Market'): {value!r}")
+    return "`limit"
+
+
 def qstr(value) -> str:
     """Normalise a q string / symbol / bytes result to a Python str."""
     if isinstance(value, bytes):
@@ -166,7 +186,7 @@ def main() -> int:
     for cell in ws[HEADER_ROW]:
         if cell.value is not None:
             headers[str(cell.value).strip()] = cell.column
-    for required in (COL_DATE, COL_SYMBOL, COL_QTY, COL_SIDE):
+    for required in (COL_DATE, COL_SYMBOL, COL_QTY, COL_SIDE, COL_OTYPE, COL_ALGO):
         if required not in headers:
             print(f"ERROR: column {required!r} not found on row {HEADER_ROW}. "
                   f"Found: {list(headers)}", file=sys.stderr)
@@ -176,6 +196,8 @@ def main() -> int:
     c_sym = headers[COL_SYMBOL]
     c_qty = headers[COL_QTY]
     c_side = headers[COL_SIDE]
+    c_otype = headers[COL_OTYPE]
+    c_algo = headers[COL_ALGO]
 
     # New column goes just after the last used column.
     new_col = ws.max_column + 1
@@ -200,14 +222,17 @@ def main() -> int:
         s = ws.cell(row=row, column=c_sym).value
         q = ws.cell(row=row, column=c_qty).value
         sd = ws.cell(row=row, column=c_side).value
+        ot = ws.cell(row=row, column=c_otype).value
+        al = ws.cell(row=row, column=c_algo).value
 
+        key = (d, s, q, sd, ot, al)
         # Skip fully blank rows.
-        if d is None and s is None and q is None and sd is None:
+        if all(v is None for v in key):
             continue
         # Skip rows missing any key field (can't match on partial keys).
-        if d is None or s is None or q is None or sd is None:
+        if any(v is None for v in key):
             n_skipped += 1
-            conflicts.append([row, d, s, q, sd, "incomplete-row", ""])
+            conflicts.append([row, d, s, q, sd, ot, al, "incomplete-row", ""])
             continue
 
         try:
@@ -216,11 +241,13 @@ def main() -> int:
                 sym=q_sym(s),
                 size=q_qty(q),
                 side=q_side(sd),
+                otype=q_otype(ot),
+                algo=q_sym(al),
             )
             res = conn(query).pd()
         except Exception as exc:  # noqa: BLE001 - report and keep going
             n_skipped += 1
-            conflicts.append([row, d, s, q, sd, f"query-error: {exc}", ""])
+            conflicts.append([row, d, s, q, sd, ot, al, f"query-error: {exc}", ""])
             continue
 
         flex_values = [qstr(v) for v in res["flex"].tolist()] if "flex" in res else []
@@ -233,7 +260,7 @@ def main() -> int:
             # 0 or >1 matches -> leave FLEX ID blank, record for manual review.
             n_conflict += 1
             reason = "no-match" if n == 0 else f"multiple({n})"
-            conflicts.append([row, d, s, q, sd, reason, " | ".join(flex_values)])
+            conflicts.append([row, d, s, q, sd, ot, al, reason, " | ".join(flex_values)])
 
     wb.save(out_path)
     print(f"Wrote {out_path}  (matched={n_matched}, conflicts={n_conflict}, skipped={n_skipped})")
@@ -242,7 +269,7 @@ def main() -> int:
         with open(conflicts_path, "w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
             w.writerow(["excel_row", COL_DATE, COL_SYMBOL, COL_QTY, COL_SIDE,
-                        "reason", "candidate_flex_ids"])
+                        COL_OTYPE, COL_ALGO, "reason", "candidate_flex_ids"])
             w.writerows(conflicts)
         print(f"Wrote {conflicts_path}  ({len(conflicts)} rows to resolve)")
     else:
