@@ -22,7 +22,6 @@ Usage
 
 import argparse
 import csv
-import datetime as dt
 import sys
 from copy import copy
 
@@ -78,21 +77,23 @@ getTag:{[tag;msg]
   $[count m; (1+count tag)_ first m; ""] }
 '''
 
-# qfn[d;s;sz;sd]: the constrained lookup, with FLEX extracted server-side so we
-# never ship whole fix messages back over the wire.
-_QFN_Q = (
-    "qfn:{[d;s;sz;sd] "
-    "t:select date,sym,size,side,basket,fixmsg "
+# The constrained lookup, run DIRECTLY per row (no stored q function). Each key
+# value is rendered as a q literal and dropped straight into the query, so its
+# type is exactly what we write and nothing gets re-typed on the way through a
+# lambda's arguments. FLEX is extracted server-side via getTag so we never ship
+# whole fix messages back over the wire.
+QUERY_TEMPLATE = (
+    "select date,sym,size,side,basket,"
+    'flex:getTag["' + FIX_TAG + '";] each fixmsg '
     "from " + TARGET_TABLE + " "
-    'where date=d,sym=s,size=sz,side=sd,basket like "*ARROWP*"; '
-    ':update flex:getTag["' + FIX_TAG + '";] each fixmsg from t}'
+    'where date={date}, sym={sym}, size={size}, side={side}, '
+    'basket like "*ARROWP*"'
 )
 
 
 def connect(host: str, port: int) -> kx.SyncQConnection:
     conn = kx.SyncQConnection(host=host, port=port)
-    conn(_GETTAG_Q)
-    conn(_QFN_Q)
+    conn(_GETTAG_Q)  # getTag is a pure string helper — no query, no key types
     return conn
 
 
@@ -100,35 +101,36 @@ def connect(host: str, port: int) -> kx.SyncQConnection:
 # helpers
 # --------------------------------------------------------------------------- #
 
-def to_qdate(value) -> "kx.DateAtom":
-    """Coerce an Excel cell (datetime, date, or 'YYYY-MM-DD'/'YYYY.MM.DD' string)
-    into a q date atom."""
-    if isinstance(value, dt.datetime):
-        value = value.date()
-    if isinstance(value, dt.date):
-        return kx.DateAtom(value)
+def q_date(value) -> str:
+    """The Excel date is already in q's 'YYYY.MM.DD' form, so pass it straight
+    through as the q date literal."""
+    return str(value).strip()
+
+
+def q_sym(value) -> str:
+    """Render a value as a q symbol literal, e.g. `AAPL."""
+    return "`" + str(value).strip()
+
+
+def q_qty(value) -> str:
+    """Render the order quantity as a numeric q literal.
+
+    Excel often stores quantities as text with thousands separators like
+    '1,000'; strip the commas before parsing so it becomes a clean number.
+    Whole values render as integers (q longs), fractional values as floats."""
     if isinstance(value, str):
-        s = value.strip().replace(".", "-").replace("/", "-")
-        return kx.DateAtom(dt.date.fromisoformat(s))
-    raise ValueError(f"Unrecognised date value: {value!r}")
+        value = value.replace(",", "").strip()
+    num = float(value)
+    return str(int(num) if num.is_integer() else num)
 
 
-def to_qside(value):
-    """Translate + type the side value for the kdb match."""
+def q_side(value) -> str:
+    """Translate + render the side value as a q literal (symbol or char)."""
     raw = str(value).strip()
     v = SIDE_MAP.get(raw.upper(), raw) if SIDE_MAP else raw
     if SIDE_Q_TYPE == "char":
-        # single-char side, e.g. "1"/"2" or "B"/"S"
-        return kx.CharAtom(v) if len(v) == 1 else kx.CharVector(v)
-    return kx.SymbolAtom(v)
-
-
-def to_qqty(value):
-    """Send the order quantity as a numeric atom. Whole floats become longs so
-    they match integer size columns; q compares across numeric types anyway."""
-    if isinstance(value, float) and value.is_integer():
-        value = int(value)
-    return value  # pykx converts Python int/float to a q long/float
+        return '"' + v + '"'  # q char literal, e.g. "1"/"2" or "B"/"S"
+    return "`" + v            # q symbol literal, e.g. `buy
 
 
 def qstr(value) -> str:
@@ -209,13 +211,13 @@ def main() -> int:
             continue
 
         try:
-            res = conn(
-                "qfn",
-                to_qdate(d),
-                kx.SymbolAtom(str(s).strip()),
-                to_qqty(q),
-                to_qside(sd),
-            ).pd()
+            query = QUERY_TEMPLATE.format(
+                date=q_date(d),
+                sym=q_sym(s),
+                size=q_qty(q),
+                side=q_side(sd),
+            )
+            res = conn(query).pd()
         except Exception as exc:  # noqa: BLE001 - report and keep going
             n_skipped += 1
             conflicts.append([row, d, s, q, sd, f"query-error: {exc}", ""])
