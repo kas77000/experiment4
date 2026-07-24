@@ -99,8 +99,7 @@ ORDER_FN = """
        from workorder
        where id_target in exec id_target from o;
   o:o lj st;
-  o:o lj wo;
-  update executed:0N^executed, remaining:0N^remaining, nReject:0^nReject from o }
+  o lj wo }
 """
 
 
