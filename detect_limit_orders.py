@@ -38,14 +38,27 @@ import pykx as kx
 # --------------------------------------------------------------------------- #
 
 # Eligible target orders for one date `x`: Asian names with a non-null algo.
+# Each target is enriched with its child-split stats from `workorder`:
+#   nChild : number of workorders created for this target (0 if none)
+#   venue  : venue of the latest-created workorder for this target (null if none)
+# The workorder rows are sorted by `time` (creation time) ascending so `last
+# venue` is the most-recently-created venue. The aggregation is filtered to the
+# eligible targets, then left-joined so targets with no workorder still appear
+# (nChild=0, venue=null).
 ORDER_FN = """
 {[x]
-  select date, id_target, trader, basket, sym, side, size,
-         limit_price, algo, t_start, t_end
-    from target
-    where date=x,
-      any sym like/: ("*.IN";"*.JP";"*.C1";"*.C2";"*.CH";"*.TT"),
-      not null algo }
+  o:select date, id_target, trader, basket, sym, side, size,
+           limit_price, algo, t_start, t_end
+      from target
+      where date=x,
+        any sym like/: ("*.IN";"*.JP";"*.C1";"*.C2";"*.CH";"*.TT"),
+        not null algo;
+  w:select nChild:count i, venue:last venue
+      by id_target
+      from `time xasc select id_target, venue, time
+        from workorder
+        where date=x, id_target in exec id_target from o;
+  update nChild:0^nChild from o lj w }
 """
 
 # Up/Down/Locked quote states on date `d`, restricted to the traded `syms`.
@@ -56,7 +69,7 @@ QUOTE_FN = """
 {[d;syms]
   select sym, time,
          state:?[qask=0&qbid>0;`up;?[qbid=0&qask>0;`down;`locked]],
-         lastPrice
+         lastPrice, qbid, qask
     from qatt
     where date=d,
       sym in syms,
@@ -129,13 +142,19 @@ def join_orders_quotes(orders: pd.DataFrame, quotes: pd.DataFrame) -> pd.DataFra
     if merged.empty:
         return pd.DataFrame()
 
-    # `last lastPrice` == latest-in-time price within the group.
+    # `last` == latest-in-time value within the group. bid/ask are the qbid/qask
+    # of that last one-sided (or locked) status; nChild/venue are per-target
+    # constants carried through from the order side.
     merged = merged.sort_values("time")
     grouped = merged.groupby(ORDER_KEYS + ["state"], as_index=False, dropna=False)
     return grouped.agg(
         stateStart=("time", "min"),
         stateEnd=("time", "max"),
         lastPrice=("lastPrice", "last"),
+        bid=("qbid", "last"),
+        ask=("qask", "last"),
+        nChild=("nChild", "first"),
+        venue=("venue", "first"),
     )
 
 
