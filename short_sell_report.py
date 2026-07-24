@@ -90,11 +90,12 @@ ORDER_FN = """
        by id_target
        from target_state
        where id_target in exec id_target from o;
+  o:o lj st;
+  o:select from o where executed>0;
   wo:select nReject:sum state like "*reject*"
        by id_target
        from workorder
        where id_target in exec id_target from o;
-  o:o lj st;
   o lj wo }[]
 """
 
