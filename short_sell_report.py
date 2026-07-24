@@ -44,11 +44,6 @@ import pykx as kx
 # Config
 # --------------------------------------------------------------------------- #
 
-# The side value that marks a short-sell order. Assumed to be a q *symbol*
-# column (`sellshort). If your `side` column is a string, drop the `$ cast in
-# ORDER_FN (compare against the raw string instead).
-SHORT_SELL_SIDE = "sellshort"
-
 # sym suffix -> market name, in display order.
 MARKETS = {
     ".HK": "Hong Kong",
@@ -83,12 +78,13 @@ GOOD = "#006300"      # positive delta / high completion
 #   nReject   : # workorders whose `state` contains "reject"/"rejected"
 # `last` uses natural (append/chronological) RDB order; if target_state has a
 # `time` column you'd rather trust, prepend `` `time xasc `` to that select.
+# The trailing `[]` invokes the niladic lambda so `conn(ORDER_FN)` returns the
+# table (not the function itself). `side` is the symbol `sellshort`.
 ORDER_FN = """
-{[ss]
-  s:`$ss;
+{[]
   o:select id_target, sym, side, size
       from target
-      where side=s,
+      where side=`sellshort,
         any sym like/: ("*.HK";"*.JP";"*.KS";"*.MK";"*.TB");
   st:select remaining:last open, executed:last make
        by id_target
@@ -99,7 +95,7 @@ ORDER_FN = """
        from workorder
        where id_target in exec id_target from o;
   o:o lj st;
-  o lj wo }
+  o lj wo }[]
 """
 
 
@@ -109,10 +105,7 @@ ORDER_FN = """
 
 def fetch_orders(conn: "kx.SyncQConnection") -> pd.DataFrame:
     """Enriched short-sell orders from the live RDB, as a pandas frame."""
-    # Pass the side value as a q char vector (string), not a bare Python str
-    # (which pykx would send as a symbol) — ORDER_FN casts it with `$ and
-    # compares against the symbol `side` column.
-    return conn(ORDER_FN, kx.CharVector(SHORT_SELL_SIDE)).pd()
+    return conn(ORDER_FN).pd()
 
 
 def market_of(sym: str) -> str:
