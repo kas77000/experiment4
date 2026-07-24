@@ -48,12 +48,13 @@ import pykx as kx
 ORDER_FN = """
 {[x]
   o:select date, id_target, trader, basket, sym, side, size,
-           limit_price, algo, t_start, t_end
+           limit_price, algo, t_gen, t_start, t_end
       from target
       where date=x,
         any sym like/: ("*.IN";"*.JP";"*.C1";"*.C2";"*.CH";"*.TT"),
         not null algo;
-  w:select nChild:count i, venue:last venue
+  w:select nChild:count i, venue:last venue,
+           first_worker_time:first time, last_worker_time:last time
       by id_target
       from `time xasc select id_target, venue, time
         from workorder
@@ -80,7 +81,7 @@ QUOTE_FN = """
 # minus the derived `targetSym`/`state`).
 ORDER_KEYS = [
     "date", "id_target", "trader", "basket", "sym", "side",
-    "size", "limit_price", "algo", "t_start", "t_end",
+    "size", "limit_price", "algo", "t_gen", "t_start", "t_end",
 ]
 
 
@@ -99,6 +100,22 @@ def parse_date(s: str) -> dt.date:
             continue
     raise argparse.ArgumentTypeError(
         f"Unrecognized date {s!r}; use YYYY.MM.DD or YYYY-MM-DD.")
+
+
+def format_time_of_day(td) -> object:
+    """Render a pandas Timedelta as ``HH:MM:SS.sss`` (drops the '0 days' part).
+
+    q ``time``/``timespan`` columns arrive as timedeltas, which stringify as
+    ``0 days HH:MM:SS.sss``. Nulls (NaT) and non-timedelta values (e.g. a full
+    ``timestamp``/datetime) are passed through unchanged.
+    """
+    if pd.isna(td) or not isinstance(td, pd.Timedelta):
+        return td
+    total = td.total_seconds()
+    hours, rem = divmod(int(total), 3600)
+    minutes, seconds = divmod(rem, 60)
+    millis = int(round((total - int(total)) * 1000))
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{millis:03d}"
 
 
 def trading_dates(start: dt.date, end: dt.date, include_weekends: bool):
@@ -147,7 +164,7 @@ def join_orders_quotes(orders: pd.DataFrame, quotes: pd.DataFrame) -> pd.DataFra
     # constants carried through from the order side.
     merged = merged.sort_values("time")
     grouped = merged.groupby(ORDER_KEYS + ["state"], as_index=False, dropna=False)
-    return grouped.agg(
+    result = grouped.agg(
         stateStart=("time", "min"),
         stateEnd=("time", "max"),
         lastPrice=("lastPrice", "last"),
@@ -155,7 +172,13 @@ def join_orders_quotes(orders: pd.DataFrame, quotes: pd.DataFrame) -> pd.DataFra
         ask=("qask", "last"),
         nChild=("nChild", "first"),
         venue=("venue", "first"),
+        first_worker_time=("first_worker_time", "first"),
+        last_worker_time=("last_worker_time", "first"),
     )
+
+    # Drop states seen only once in the window (stateStart == stateEnd): a
+    # single-tick event isn't relevant for the test.
+    return result[result["stateStart"] != result["stateEnd"]]
 
 
 # --------------------------------------------------------------------------- #
@@ -242,6 +265,13 @@ def main(argv=None) -> int:
         return 0
 
     result = result.sort_values(["date", "id_target", "state"]).reset_index(drop=True)
+
+    # Render time-of-day columns as HH:MM:SS.sss instead of "0 days HH:MM:SS.sss".
+    for col in ("t_gen", "t_start", "t_end", "stateStart", "stateEnd",
+                "first_worker_time", "last_worker_time"):
+        if col in result.columns:
+            result[col] = result[col].map(format_time_of_day)
+
     result.to_csv(args.out, index=False)
 
     print(f"\n=== {len(result)} order x state rows "
