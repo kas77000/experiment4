@@ -110,7 +110,10 @@ ORDER_FN = """
 
 def fetch_orders(conn: "kx.SyncQConnection") -> pd.DataFrame:
     """Enriched short-sell orders from the live RDB, as a pandas frame."""
-    return conn(ORDER_FN, SHORT_SELL_SIDE).pd()
+    # Pass the side value as a q char vector (string), not a bare Python str
+    # (which pykx would send as a symbol) — ORDER_FN casts it with `$ and
+    # compares against the symbol `side` column.
+    return conn(ORDER_FN, kx.CharVector(SHORT_SELL_SIDE)).pd()
 
 
 def market_of(sym: str) -> str:

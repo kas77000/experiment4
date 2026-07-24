@@ -56,6 +56,10 @@ from detect_limit_orders import (
 #   last_worker_time  : `time` of the last workorder created
 # Workorders are sorted by `time` (creation time) so first/last are correct,
 # then left-joined so targets with no workorder still appear.
+#
+# The trailing `[]` immediately *invokes* the niladic lambda: `conn(ORDER_FN)`
+# with no args only *evaluates* the lambda literal (returning the function
+# itself), so we self-apply here to get the table back.
 ORDER_FN = """
 {[]
   o:select date, id_target, trader, basket, sym, side, size,
@@ -69,7 +73,7 @@ ORDER_FN = """
       from `time xasc select id_target, venue, time
         from workorder
         where id_target in exec id_target from o;
-  update nChild:0^nChild from o lj w }
+  update nChild:0^nChild from o lj w }[]
 """
 
 # Up/Down/Locked quote states, restricted to the traded `syms`.
