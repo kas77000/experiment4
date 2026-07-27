@@ -1,6 +1,9 @@
-# Phase 1 (empirical percentile bands) needs only these:
+# Shared pipeline + Tier 1 + Tier 2
 pandas>=2.0
 numpy>=1.24
 
-# Phase 2 (regression / quantile-regression cost model) will add:
-# statsmodels>=0.14
+# Tier 3: quantile regression cost model, t-tests and BH correction
+scipy>=1.10
+statsmodels>=0.14
+# statsmodels is optional in practice -- tier3_model falls back to bucketed
+# empirical quantiles when it is absent (backend="auto"). scipy is required.
