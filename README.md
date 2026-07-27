@@ -248,9 +248,31 @@ Flags are then tiered, because a flag costs analyst time:
 | **MONITOR** | outside the band | logged and trended |
 | **ESCALATE** | z beyond 3 | written justification |
 
-Plus the materiality gate. The default band is deliberately lopsided --- about 2%
-on the downside, 1% on the upside --- because underperformance is what you act on,
-while the upper gate mainly catches data errors. Total queue: ~3% of the book.
+The default band is deliberately lopsided --- 1% on the downside, 0.5% on the
+upside --- because underperformance is what you act on, while the upper gate
+mainly catches data errors. Total queue: **~1.7% of the book**.
+
+**The flag rate is a dial, not a finding.** It is set by the percentile choice
+and you get back what you dial in, near-exactly:
+
+| setting | nominal | actually flagged |
+|---|---|---|
+| 0.02 / 0.99 | 3.00% | 3.12% |
+| **0.01 / 0.995** *(current)* | **1.50%** | **1.77%** |
+| 0.005 / 0.9975 | 0.75% | 0.89% |
+| 0.0025 / 0.999 | 0.35% | 0.62% |
+
+So "only 1.7% of orders fell outside the range" states where the threshold was
+set, not how well anyone traded. Set it to 0.35% and it looks better; set it to
+p10/p90 and 20% flags, with identical underlying executions. The number that
+carries information is the calibration table in Step 3. Change it in
+`tier3_model/config.py`; below about 0.0025 the far tail has too few
+observations to fit and calibration starts to drift.
+
+There is also an optional **materiality gate** (`min_notional_review`): `flagged`
+is everything outside the band, and an order additionally needs a minimum
+notional to become `review_required`. It ships **off**, so the two are equal and
+everything outside the threshold goes in the queue.
 
 ### Step 3 --- Prove the threshold is honest
 
@@ -324,6 +346,14 @@ cause:
 finish, you moved it yourself --- trade slower. If it does not, you either paid
 the spread or were adversely selected --- a completely different fix. Without
 post-trade marks these two look identical and have opposite remedies.
+
+That last point is enforced rather than just documented. When no reversion column
+is present, low passive fill is genuinely ambiguous between "we crossed the
+spread all day" and "we pushed so hard the price ran away", because both leave
+the same footprint. The label emitted in that case is
+**`low_passive_unverified`**, which names both remedies and says which column
+would separate them --- rather than confidently prescribing "post more" for an
+order whose real fix is "trade slower".
 
 Rules trigger at percentiles of *your own book*, so nothing needs retuning for a
 different market or year. On the demo book, **92% of flagged real failures get
@@ -408,32 +438,38 @@ Wired for this extract:
 | `Dur` | duration | minutes |
 | `$Mln` | notional | x 1,000,000 |
 | `#Shares` | quantity | x 1,000 |
+| `%POST` | passive fill share | percent -> fraction |
+| `%OPEN` + `%CLOSE` | auction share | summed, percent -> fraction |
 
-**All six cost-model features are live.** Everything in Tiers 1, 2 and 3 runs:
-the full model, per-order horizons, cross-fitting, calibration, the review queue,
-and slice tests on algo, market, size bucket and their combinations.
+**All six cost-model features are live**, and **two of four cause rules** work:
+`spread_bleed` (from `%POST`) and `missed_close` (from `%OPEN` + `%CLOSE`). Both
+attribute at 100% accuracy on labelled data.
 
-**Two things are still missing.**
+`%POST`, `%OPEN` and `%CLOSE` are wired as **diagnostics, not model features**,
+on purpose. They describe how the order was executed, not how hard it was --- and
+if passive fill went into the expected-cost model, an algo that crosses the
+spread all day would lower its own expectation and stop flagging, absorbing the
+exact behaviour the report exists to catch.
 
-*Cause attribution is unavailable.* It needs at least one of `reversion_bps`,
-`passive_fill_pct`, `auction_pct` or `momentum_bps`. Without them Tier 3 gives you
-the thresholds, the z-scores and the slice tests, but every flag comes back
-"unexplained" --- it tells you *which* orders, never *why*. **If you can get one
-column added, ask for post-trade reversion**; it is what separates "we moved the
-price" from "we were adversely selected".
+**What is still missing.**
 
-*No `broker` column*, so no broker slice test. On the demo book that test finds
-the single largest systematic effect.
+*`reversion_bps`* --- the `over_aggressive` rule cannot fire without it, and
+`spread_bleed` loses its corroborating check. Orders that are really "traded too
+fast" currently land under `low_passive_unverified` alongside genuine spread
+bleed, because the two are indistinguishable without post-trade marks. Still the
+highest-value column outstanding.
+
+*`broker`* --- no broker slice test. On the demo book that test finds the single
+largest systematic effect.
 
 In rough order of value per column added:
 
 | column | unlocks |
 |---|---|
-| `reversion_bps` | cause attribution --- the difference between "which orders" and "why" |
+| `reversion_bps` | separates "we moved the price" from "we paid the spread" --- opposite remedies |
 | `broker` | broker-level performance testing |
-| `passive_fill_pct` | separates spread bleed from market impact |
-| `auction_pct` | catches missed-close participation, which matters a lot in HK |
 | `side` | directional-bias checks |
+| `momentum_bps` | the adverse-drift rule (minor for interval VWAP) |
 
 Everything the code needs to consume these is already in place --- add the column
 to the extract and it lights up automatically.

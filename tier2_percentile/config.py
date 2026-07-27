@@ -32,8 +32,9 @@ class Tier2Config:
     # Grouping keys for the most specific level.
     group_keys: tuple = (schema.ALGO, schema.MARKET, schema.ADV_BUCKET)
 
-    # Materiality gate for the review queue.
-    min_notional_review: float = 1_000_000.0   # HKD
+    # Materiality gate for the review queue. 0 = off, so review_required ==
+    # flagged: everything outside the band goes in the queue.
+    min_notional_review: float = 0.0
 
 
 CONFIG = Tier2Config()

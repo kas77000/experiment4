@@ -10,13 +10,29 @@ class Tier3Config:
     # tau_hi surfaces ARE the threshold; tau_med is the expected cost.
     #
     # Deliberately ASYMMETRIC. Underperformance is what you act on, so the lower
-    # gate is set to catch ~2% of orders; the upper gate exists to surface data
-    # and benchmark errors, which are rarer and cheaper to check, so ~1%. Total
-    # queue ~3% of the book, which is what a human can actually work through.
-    # Set (0.05, 0.95) if you want a symmetric band to inspect calibration.
-    tau_lo: float = 0.02
+    # gate carries most of the budget; the upper gate exists to surface data and
+    # benchmark errors, which are rarer and cheaper to check.
+    #
+    # THIS IS THE DIAL THAT SETS YOUR FLAG RATE. It is a review-capacity
+    # decision, not a discovery: you get back what you dial in, near-exactly.
+    # Measured out-of-sample on the live column format:
+    #
+    #     tau_lo / tau_hi     nominal   flagged
+    #     0.02   / 0.99        3.00%     3.12%
+    #     0.01   / 0.995       1.50%     1.77%   <- current
+    #     0.005  / 0.9975      0.75%     0.89%
+    #     0.0025 / 0.999       0.35%     0.62%   <- calibration starts to drift
+    #
+    # So "only 1.8% of orders fell outside the range" says where the threshold
+    # was set, NOT how well anyone traded. The number that means something is
+    # the calibration table (realized vs nominal), which says the gate will
+    # still hold on next quarter's orders.
+    #
+    # Below ~0.0025 the far tail has too few observations to fit reliably and
+    # realized coverage drifts above nominal -- do not go tighter than that.
+    tau_lo: float = 0.01
     tau_med: float = 0.50
-    tau_hi: float = 0.99
+    tau_hi: float = 0.995
 
     # --- how the algo enters the model -----------------------------------
     #   "absorb"  algo dummies IN the model. Each algo is judged against its own
@@ -60,7 +76,18 @@ class Tier3Config:
     # Outside the band at all -> MONITOR (logged, trended, no action).
     # |z| beyond escalate_z   -> ESCALATE (written justification).
     escalate_z: float = 3.0
-    min_notional_review: float = 1_000_000.0   # HKD materiality gate
+
+    # Materiality gate: `flagged` is everything outside the band; an order also
+    # needs notional >= this to become `review_required`. The idea is that an
+    # order 3 sigma off on a tiny notional is statistically real but costs
+    # almost nothing in money terms.
+    #
+    # DEFAULT 0 = OFF, so review_required == flagged: everything outside the
+    # threshold goes in the queue. Turn it on only once you have confirmed what
+    # currency `$Mln` is denominated in -- the gate is in the same units as
+    # notional, so a value meant as HK$1m would silently cut a large part of the
+    # book if the extract is in USD millions.
+    min_notional_review: float = 0.0
 
     # --- backend ----------------------------------------------------------
     #   "auto"      quantile regression if statsmodels imports, else empirical

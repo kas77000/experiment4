@@ -19,9 +19,11 @@ class Tier1Config:
     max_spread_multiple: float = 3.0   # "more than 3 spreads through"
     max_sigma_multiple: float = 3.0    # best of the three: risk-adjusted, still fixed
 
-    # Materiality gate: orders below this notional are never sent for review,
-    # however bad they look. Set 0 to disable.
-    min_notional_review: float = 1_000_000.0   # HKD
+    # Materiality gate: `flagged` is everything past the limit; an order also
+    # needs notional >= this to become `review_required`. 0 = off, so
+    # review_required == flagged. See the note in tier3_model/config.py on
+    # matching this to the currency your notional is denominated in.
+    min_notional_review: float = 0.0
 
 
 CONFIG = Tier1Config()

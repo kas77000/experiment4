@@ -13,6 +13,8 @@ Currently wired for an extract with these columns:
     Dur        -> duration_min  (minutes: (endtime - starttime) / 60)
     $Mln       -> notional     (x 1,000,000)
     #Shares    -> quantity     (x 1,000)
+    %POST      -> passive_fill_pct  (percent -> fraction)
+    %OPEN+%CLOSE -> auction_pct     (summed, percent -> fraction)
 
 Run `python check_extract.py your.csv` BEFORE anything else. It reads the file
 and tells you what to set for the two things a column name cannot tell you:
@@ -60,6 +62,23 @@ def PRE_TRANSFORM(df: pd.DataFrame) -> pd.DataFrame:
     if "#Shares" in df.columns:
         df["_quantity"] = pd.to_numeric(df["#Shares"], errors="coerce") * LOT
 
+    # --- execution-style diagnostics: percentages -> fractions -------------
+    # These describe HOW the order was executed, not how hard it was. They feed
+    # the cause rules only -- deliberately NOT the cost model. Putting passive
+    # fill into the expected-cost model would let an algo that crosses the
+    # spread all day lower its own expectation and stop flagging, absorbing the
+    # exact behaviour the report exists to catch.
+    if "%POST" in df.columns:
+        df["_passive_fill"] = pd.to_numeric(df["%POST"], errors="coerce") / 100.0
+
+    # Total auction participation = opening + closing. Summed with min_count=1
+    # so a row stays NaN only when BOTH are missing -- otherwise an absent
+    # %OPEN would read as "did no auction volume" and trip the rule falsely.
+    auction_cols = [c for c in ("%OPEN", "%CLOSE") if c in df.columns]
+    if auction_cols:
+        df["_auction"] = df[auction_cols].apply(
+            pd.to_numeric, errors="coerce").sum(axis=1, min_count=1) / 100.0
+
     return df
 
 
@@ -83,15 +102,17 @@ COLUMN_MAP = {
     schema.NOTIONAL:      "_notional",     # <- $Mln x 1e6
     schema.QUANTITY:      "_quantity",     # <- #Shares x 1e3
 
+    # --- diagnostic inputs: what the cause rules run on --------------------
+    schema.PASSIVE_FILL_PCT: "_passive_fill",  # <- %POST / 100
+    schema.AUCTION_PCT:      "_auction",       # <- (%OPEN + %CLOSE) / 100
+
     # --- not in your extract yet; left mapped so they light up automatically
     #     the day they appear. See "What to ask for next" in the README.
     schema.BROKER:        "broker",
     schema.SIDE:          "side",
     schema.BENCHMARK:     "benchmark_type",
-    schema.REVERSION_BPS:    "reversion_bps",
-    schema.PASSIVE_FILL_PCT: "passive_fill_pct",
-    schema.AUCTION_PCT:      "auction_pct",
-    schema.MOMENTUM_BPS:     "momentum_bps",
+    schema.REVERSION_BPS: "reversion_bps",
+    schema.MOMENTUM_BPS:  "momentum_bps",
 }
 
 
@@ -189,7 +210,8 @@ DATA = DataConfig()
 # WHAT YOUR EXTRACT SUPPORTS TODAY
 # ---------------------------------------------------------------------------
 # Present:  order_id, algo, market, symbol, slippage, spread, %ADV, vol,
-#           participation, duration, notional, quantity
+#           participation, duration, notional, quantity,
+#           passive fill %, auction %
 #
 # Works fully -- ALL SIX cost-model features are live:
 #   Tier 1  all three rules
@@ -200,10 +222,21 @@ DATA = DataConfig()
 #           calibration; z-scores; review queue; slice t-tests on algo / market /
 #           %ADV bucket and their crosses
 #
+# Cause attribution: TWO of four rules are live.
+#   spread_bleed  <- %POST          crossed the spread when it should have posted
+#   missed_close  <- %OPEN + %CLOSE under-participated in the auctions
+#
 # Degraded, and by how much:
-#   no broker        -> no broker slice test. On the demo book that test is what
-#                       finds the single largest systematic effect.
-#   no side          -> no side dummy (minor)
+#   no broker         -> no broker slice test. On the demo book that test is what
+#                        finds the single largest systematic effect.
+#   no reversion_bps  -> the over_aggressive rule cannot fire, and spread_bleed
+#                        loses its corroborating check. Without post-trade marks,
+#                        "we moved the price" and "we paid the spread" cannot be
+#                        told apart -- and they have opposite remedies. Still the
+#                        highest-value column missing.
+#   no momentum_bps   -> the adverse_momentum rule cannot fire (minor for
+#                        interval VWAP, which is largely immune to drift)
+#   no side           -> no side dummy (minor)
 #
 # NOT AVAILABLE:
 #   Cause attribution needs at least one of reversion_bps / passive_fill_pct /

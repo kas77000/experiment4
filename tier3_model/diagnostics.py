@@ -37,6 +37,12 @@ from tier3_model import features, scoring
 
 OVER_AGGRESSIVE = "over_aggressive"
 SPREAD_BLEED = "spread_bleed"
+# Emitted INSTEAD of SPREAD_BLEED when no reversion column is available. Low
+# passive fill on its own cannot distinguish "we crossed the spread all day"
+# from "we pushed so hard the price ran away from us" -- both leave the same
+# footprint, and they have opposite remedies. Claiming spread_bleed here would
+# prescribe "post more" for orders whose real fix is "trade slower".
+LOW_PASSIVE_UNVERIFIED = "low_passive_unverified"
 MISSED_CLOSE = "missed_close"
 ADVERSE_MOMENTUM = "adverse_momentum"
 UNEXPLAINED = "unexplained"
@@ -55,6 +61,10 @@ RULE_WEIGHT = {
 REMEDY = {
     OVER_AGGRESSIVE: "Cap participation / lengthen the horizon on this profile.",
     SPREAD_BLEED: "Increase passive posting; review the algo's crossing logic.",
+    LOW_PASSIVE_UNVERIFIED: (
+        "Passive fill far below this algo's norm -- either it crossed the spread "
+        "(post more) or it pushed too hard and the price ran (trade slower). "
+        "Add reversion_bps to tell these apart."),
     MISSED_CLOSE: "Route a closing-auction slice; check the auction cut-off.",
     ADVERSE_MOMENTUM: "Execution was reasonable; revisit timing of the decision.",
     UNEXPLAINED: "Verify marks, benchmark window and fill timestamps first.",
@@ -158,6 +168,13 @@ def attribute(scored: pd.DataFrame, cause_model: CauseModel) -> pd.DataFrame:
     cause = cause.where(out["flagged"], NOT_FLAGGED)
     cause = cause.mask(out["zone"] == scoring.OUT_HIGH, TOO_GOOD)
 
+    # Without post-trade marks, low passive fill is ambiguous between spread
+    # cost and own impact. Downgrade the label rather than emit a confident
+    # diagnosis the data cannot support -- a wrong remedy is worse than an
+    # honest "one of these two".
+    if "rev" not in cause_model.ranks.columns:
+        cause = cause.replace(SPREAD_BLEED, LOW_PASSIVE_UNVERIFIED)
+
     out["likely_cause"] = cause
     out["cause_strength"] = np.where(out["flagged"], strength.round(3), np.nan)
     out["remedy"] = out["likely_cause"].map(REMEDY).fillna("")
@@ -195,9 +212,12 @@ def cause_confusion(attributed: pd.DataFrame) -> pd.DataFrame:
 # What counts as a correct attribution, for scoring the demo. `benchmark_error`
 # is injected WITHOUT any execution fingerprint, so "unexplained" / "check the
 # marks" is the right answer for it -- not a miss.
+# LOW_PASSIVE_UNVERIFIED counts as correct for BOTH over_aggressive and
+# spread_bleed: with no reversion column it is the most specific true statement
+# available, and it names both remedies rather than guessing one.
 CORRECT_ATTRIBUTION = {
-    "over_aggressive": {OVER_AGGRESSIVE},
-    "spread_bleed": {SPREAD_BLEED},
+    "over_aggressive": {OVER_AGGRESSIVE, LOW_PASSIVE_UNVERIFIED},
+    "spread_bleed": {SPREAD_BLEED, LOW_PASSIVE_UNVERIFIED},
     "missed_close": {MISSED_CLOSE},
     "benchmark_error": {UNEXPLAINED, TOO_GOOD},
 }
