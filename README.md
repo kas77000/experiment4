@@ -440,6 +440,8 @@ Wired for this extract:
 | `#Shares` | quantity | x 1,000 |
 | `%POST` | passive fill share | percent -> fraction |
 | `%OPEN` + `%CLOSE` | auction share | summed, percent -> fraction |
+| `Side` | direction | `BUY` / `SELL` / `SSH` -> buy/sell |
+| `Rev30min` | post-trade reversion | sign-corrected using `Side` |
 
 Notional is **USD** (`notional_currency` in `config.py`), which makes the bps
 shortfall convertible into actual cash:
@@ -459,7 +461,7 @@ low_passive_unverified      45    -3.33                -80.4   -2,241,231
 missed_close                36    -3.52                -77.8   -1,471,786
 ```
 
-**All six cost-model features are live**, and **two of four cause rules** work:
+**All seven cost-model features are live** (side included), and **three of four cause rules** work:
 `spread_bleed` (from `%POST`) and `missed_close` (from `%OPEN` + `%CLOSE`). Both
 attribute at 100% accuracy on labelled data.
 
@@ -469,25 +471,61 @@ if passive fill went into the expected-cost model, an algo that crosses the
 spread all day would lower its own expectation and stop flagging, absorbing the
 exact behaviour the report exists to catch.
 
+### The reversion column, and why its sign needs checking
+
+`Rev30min` is what makes cause attribution work. Reversion is the test that
+separates "we moved the price ourselves" (it snaps back --- trade slower) from
+"we paid the spread or got picked off" (it doesn't --- post more). Without it
+those two collapse into one ambiguous bucket.
+
+But reversion is **signed by direction**, and a raw post-trade-minus-fill
+difference points opposite ways for buys and sells: you push a buy up so it
+falls back, you push a sell down so it rises back. An unsigned column averaged
+over a mixed book cancels to nothing, and on any single order a large negative
+value means "reverted nicely" on a buy and "kept running against me" on a sell
+--- the exact two states the column exists to separate.
+
+There is a second trap on top of that. The house rule "+ is good, - is bad" is
+unambiguous for `Pvwap`, but **not** for a reversion column. A buy whose price
+falls back afterwards has "bad" post-trade movement, yet that is exactly the
+impact signature worth detecting. A buy whose price keeps rising has "good"
+movement and shows no impact at all. Same sign, opposite diagnosis. Reversion is
+diagnostic, not evaluative --- a large positive reversion under the internal
+convention means *you moved the market*, which is a problem, not a win.
+
+So `check_extract.py` resolves it from the data rather than from anyone's
+recollection. It scores all four possible conventions on a physical fact ---
+bigger and faster orders push harder and give back more --- so the correct one
+is where reversion **rises** with size and participation:
+
+```
+     convention  corr_%ADV  corr_POV   score
+            raw     -0.013    -0.002  -0.007
+   raw_inverted     +0.013    +0.002  +0.007
+         signed     -0.592    -0.181  -0.386
+signed_inverted     +0.592    +0.181  +0.386   <- correct
+```
+
+The near-zero rows are the buy/sell cancellation, and they are what tells you
+which *family* you are in: if the column were raw rather than pre-signed, the
+zeros and the strong scores would swap places. So one table settles both the
+sign and whether `Side` needs applying. Set `REVERSION_SIGN` in `config.py` to
+whatever it names.
+
+`SSH` (sell short) signs as a sell, which is all the reversion maths needs. The
+raw code is preserved in `_side_raw` because HK's tick rule prevents a short
+sale executing below the best bid, so shorts are forced into more passive
+behaviour than long sales --- a genuinely different execution problem worth
+slicing separately.
+
 **What is still missing.**
 
-*`reversion_bps`* --- the `over_aggressive` rule cannot fire without it, and
-`spread_bleed` loses its corroborating check. Orders that are really "traded too
-fast" currently land under `low_passive_unverified` alongside genuine spread
-bleed, because the two are indistinguishable without post-trade marks. Still the
-highest-value column outstanding.
+*`broker`* --- no broker slice test, and this is now the highest-value column
+outstanding. On the demo book that test finds the single largest systematic
+effect.
 
-*`broker`* --- no broker slice test. On the demo book that test finds the single
-largest systematic effect.
-
-In rough order of value per column added:
-
-| column | unlocks |
-|---|---|
-| `reversion_bps` | separates "we moved the price" from "we paid the spread" --- opposite remedies |
-| `broker` | broker-level performance testing |
-| `side` | directional-bias checks |
-| `momentum_bps` | the adverse-drift rule (minor for interval VWAP) |
+*`momentum_bps`* --- the adverse-drift rule cannot fire. Minor here: interval
+VWAP is largely immune to market drift, since the benchmark moves with it.
 
 Everything the code needs to consume these is already in place --- add the column
 to the extract and it lights up automatically.

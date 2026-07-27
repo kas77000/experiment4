@@ -44,6 +44,30 @@ from tca import schema
 MLN = 1_000_000.0     # $Mln  is in millions
 LOT = 1_000.0         # #Shares is in thousands
 
+# Tokens seen in the wild for order direction. check_extract.py prints any value
+# it could not classify, so an unfamiliar code shows up rather than silently
+# becoming NaN.
+BUY_TOKENS = {"buy", "b", "bot", "bought", "bid", "long", "cover", "1", "+1"}
+# SSH = sell short. Directionally a sell -- you are pushing the price down, so
+# it signs the same way, which is all the reversion calculation needs.
+#
+# Worth knowing though: in HK a short sale cannot be executed below the best
+# bid (the tick rule), so shorts CANNOT cross down aggressively and are forced
+# into more passive behaviour than a long sale. That makes them a genuinely
+# different execution problem, not just a sell with a different label -- expect
+# them to show lower %POST-adjusted aggression and possibly a distinct residual.
+# The raw value is preserved in `_side_raw` so it can be sliced separately.
+SELL_TOKENS = {"sell", "s", "sld", "sold", "ask", "short", "ss", "ssh",
+               "sellshort", "-1", "2"}
+
+
+def _normalize_side(s: pd.Series) -> pd.Series:
+    """Map whatever the extract calls direction onto 'buy' / 'sell'."""
+    t = s.astype(str).str.strip().str.lower()
+    return pd.Series(
+        pd.NA, index=s.index, dtype="object"
+    ).mask(t.isin(BUY_TOKENS), "buy").mask(t.isin(SELL_TOKENS), "sell")
+
 
 def PRE_TRANSFORM(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -79,6 +103,40 @@ def PRE_TRANSFORM(df: pd.DataFrame) -> pd.DataFrame:
         df["_auction"] = df[auction_cols].apply(
             pd.to_numeric, errors="coerce").sum(axis=1, min_count=1) / 100.0
 
+    if "Side" in df.columns:
+        df["_side"] = _normalize_side(df["Side"])
+        # Keep the original code so short sales stay distinguishable from long
+        # sales downstream, even though both sign as "sell".
+        df["_side_raw"] = df["Side"].astype(str).str.strip().str.upper()
+
+    # --- reversion: the one column whose sign you cannot guess --------------
+    # Target: POSITIVE = the price moved back AGAINST your trade direction after
+    # you stopped = you caused the impact yourself.
+    #
+    # Raw post-trade-minus-fill differences point OPPOSITE ways for buys and
+    # sells (you push a buy up, so it falls back; you push a sell down, so it
+    # rises back), which is why side is required to use a raw column at all.
+    # An unsigned reversion averaged over a mixed book cancels to nothing, and
+    # on any single order a large negative number means "reverted nicely" on a
+    # buy and "kept running against me" on a sell -- the exact two states the
+    # column exists to separate.
+    #
+    # REVERSION_SIGN below says which of the four conventions your data uses.
+    # Run check_extract.py: it tests all four against your book and tells you.
+    if "Rev30min" in df.columns:
+        rev = pd.to_numeric(df["Rev30min"], errors="coerce")
+        if REVERSION_SIGN in ("raw", "raw_inverted"):
+            if "_side" not in df.columns:
+                raise ValueError(
+                    "REVERSION_SIGN is 'raw', which needs a direction column to "
+                    "sign it, but no 'Side' column was found. Either supply Side "
+                    "or set REVERSION_SIGN to 'signed'/'signed_inverted'.")
+            sgn = df["_side"].map({"buy": 1.0, "sell": -1.0})
+            rev = rev * sgn
+        if REVERSION_SIGN in ("raw_inverted", "signed_inverted"):
+            rev = -rev
+        df["_reversion"] = rev
+
     return df
 
 
@@ -102,16 +160,17 @@ COLUMN_MAP = {
     schema.NOTIONAL:      "_notional",     # <- $Mln x 1e6
     schema.QUANTITY:      "_quantity",     # <- #Shares x 1e3
 
+    schema.SIDE:          "_side",             # <- Side, normalized to buy/sell
+
     # --- diagnostic inputs: what the cause rules run on --------------------
     schema.PASSIVE_FILL_PCT: "_passive_fill",  # <- %POST / 100
     schema.AUCTION_PCT:      "_auction",       # <- (%OPEN + %CLOSE) / 100
+    schema.REVERSION_BPS:    "_reversion",     # <- Rev30min, sign-corrected
 
     # --- not in your extract yet; left mapped so they light up automatically
     #     the day they appear. See "What to ask for next" in the README.
     schema.BROKER:        "broker",
-    schema.SIDE:          "side",
     schema.BENCHMARK:     "benchmark_type",
-    schema.REVERSION_BPS: "reversion_bps",
     schema.MOMENTUM_BPS:  "momentum_bps",
 }
 
@@ -128,6 +187,35 @@ COLUMN_MAP = {
 # instead of your worst. `check_extract.py` infers it from the data by testing
 # whether large orders perform worse (they must).
 SLIPPAGE_SIGN = "positive_is_good"
+
+
+# ---------------------------------------------------------------------------
+# 3b) REVERSION CONVENTION  ---  which way does Rev30min point?
+# ---------------------------------------------------------------------------
+# Target convention for `reversion_bps`: POSITIVE = the price moved back AGAINST
+# your trade direction after you stopped = evidence you caused the impact
+# yourself. Note that is a BAD sign for execution quality, not a good one.
+#
+#   "signed_inverted"  already side-adjusted, +ve = favourable post-trade move
+#                      (i.e. price kept going your way, so NO reversion).
+#                      Negated.                                     <-- default
+#   "signed"           already side-adjusted, +ve = the give-back. Used as is.
+#   "raw_inverted"     Rev30min = postVWAP - lastFill. Needs Side.
+#   "raw"              Rev30min = lastFill - postVWAP. Needs Side.
+#
+# The default assumes the house rule "+ is good, - is bad". That rule is
+# unambiguous for Pvwap but NOT for a reversion column: a buy whose price falls
+# back afterwards has "bad" post-trade movement yet is exactly the impact
+# signature we want to detect, while a buy whose price keeps rising has "good"
+# movement and shows no impact at all. Same number, opposite diagnosis.
+#
+# So DO NOT rely on the default. `python check_extract.py your.csv` scores all
+# four conventions against your own book and names the winner: the correct one
+# is where reversion RISES with order size and participation, because bigger and
+# faster orders push harder and give back more. The two families are mutually
+# exclusive in the output -- whichever is wrong scores near zero -- so the test
+# confirms both the sign AND that the column is signed rather than raw.
+REVERSION_SIGN = "signed_inverted"
 
 
 @dataclass(frozen=True)
@@ -228,21 +316,21 @@ DATA = DataConfig()
 #           calibration; z-scores; review queue; slice t-tests on algo / market /
 #           %ADV bucket and their crosses
 #
-# Cause attribution: TWO of four rules are live.
-#   spread_bleed  <- %POST          crossed the spread when it should have posted
-#   missed_close  <- %OPEN + %CLOSE under-participated in the auctions
+# Cause attribution: THREE of four rules are live, and the important one works.
+#   over_aggressive <- Rev30min + PR    pushed too hard, price snapped back
+#   spread_bleed    <- %POST + Rev30min crossed when it should have posted
+#   missed_close    <- %OPEN + %CLOSE   under-participated in the auctions
+#
+# Rev30min is what separates the first two. Without it they collapse into one
+# ambiguous "low_passive_unverified" bucket, because both leave the same
+# footprint and their remedies are opposite (trade slower vs post more).
 #
 # Degraded, and by how much:
-#   no broker         -> no broker slice test. On the demo book that test is what
-#                        finds the single largest systematic effect.
-#   no reversion_bps  -> the over_aggressive rule cannot fire, and spread_bleed
-#                        loses its corroborating check. Without post-trade marks,
-#                        "we moved the price" and "we paid the spread" cannot be
-#                        told apart -- and they have opposite remedies. Still the
-#                        highest-value column missing.
-#   no momentum_bps   -> the adverse_momentum rule cannot fire (minor for
-#                        interval VWAP, which is largely immune to drift)
-#   no side           -> no side dummy (minor)
+#   no broker        -> no broker slice test. On the demo book that test is what
+#                       finds the single largest systematic effect. This is now
+#                       the highest-value column still missing.
+#   no momentum_bps  -> the adverse_momentum rule cannot fire (minor for
+#                       interval VWAP, which is largely immune to drift)
 #
 # NOT AVAILABLE:
 #   Cause attribution needs at least one of reversion_bps / passive_fill_pct /

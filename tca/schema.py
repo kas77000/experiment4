@@ -37,7 +37,10 @@ VOLATILITY = "volatility"       # DAILY volatility. Source units are declared by
                                 # assumes (180 = 1.8%/day).
 
 # --- diagnostic inputs (optional; Tier 3 uses them to attribute cause) ---
-REVERSION_BPS = "reversion_bps"        # post-trade price reversion, +ve = price came back
+REVERSION_BPS = "reversion_bps"        # post-trade reversion. +ve = the price moved
+                                       # back AGAINST your trade direction after you
+                                       # stopped, i.e. you caused the impact. That is
+                                       # a bad sign for execution, not a good one.
 PASSIVE_FILL_PCT = "passive_fill_pct"  # fraction of qty filled passively (0-1)
 AUCTION_PCT = "auction_pct"            # fraction of qty done in auctions (0-1)
 MOMENTUM_BPS = "momentum_bps"          # market drift over the interval, signed vs your side

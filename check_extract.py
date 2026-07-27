@@ -150,6 +150,68 @@ def infer_sign(df: pd.DataFrame) -> tuple[str, list[str], int]:
     return real[0], notes, len(real)
 
 
+REVERSION_CONVENTIONS = ["raw", "raw_inverted", "signed", "signed_inverted"]
+
+
+def _apply_reversion(rev: pd.Series, side_sign: pd.Series | None,
+                     convention: str) -> pd.Series:
+    out = rev.astype(float)
+    if convention in ("raw", "raw_inverted"):
+        if side_sign is None:
+            return pd.Series(np.nan, index=rev.index)
+        out = out * side_sign
+    if convention in ("raw_inverted", "signed_inverted"):
+        out = -out
+    return out
+
+
+def infer_reversion_sign(raw: pd.DataFrame, named: pd.DataFrame):
+    """Score all four reversion conventions against the book.
+
+    The physics: bigger and faster orders push the price harder, so under the
+    CORRECT convention reversion must RISE with size and participation. The
+    wrong sign inverts that; an unsigned raw column on a mixed buy/sell book
+    washes it out to roughly zero. So the convention with the strongest
+    positive correlation is the one your data uses.
+    """
+    if "Rev30min" not in raw.columns:
+        return None, []
+
+    rev = pd.to_numeric(raw["Rev30min"], errors="coerce")
+    side_sign = None
+    if schema.SIDE in named.columns:
+        side_sign = named[schema.SIDE].map({"buy": 1.0, "sell": -1.0})
+
+    drivers = [(c, l) for c, l in [(schema.PCT_ADV, "%ADV"),
+                                   (schema.PARTICIPATION, "POV")]
+               if c in named.columns]
+    if not drivers:
+        return None, ["  no %ADV or participation column to test against"]
+
+    rows = []
+    for conv in REVERSION_CONVENTIONS:
+        adj = _apply_reversion(rev, side_sign, conv)
+        if adj.isna().all():
+            rows.append({"convention": conv, "score": np.nan,
+                         "note": "needs a Side column"})
+            continue
+        cors = {}
+        for col, label in drivers:
+            x = pd.to_numeric(named[col], errors="coerce")
+            ok = adj.notna() & x.notna()
+            cors[label] = (stats.spearmanr(x[ok], adj[ok])[0]
+                           if ok.sum() > 50 else np.nan)
+        score = np.nanmean(list(cors.values()))
+        rows.append({"convention": conv, **{f"corr_{k}": round(v, 3)
+                                            for k, v in cors.items()},
+                     "score": round(float(score), 3), "note": ""})
+
+    table = pd.DataFrame(rows)
+    valid = table.dropna(subset=["score"])
+    best = valid.loc[valid["score"].idxmax(), "convention"] if len(valid) else None
+    return best, table
+
+
 # ---------------------------------------------------------------------------
 # 4. magnitudes
 # ---------------------------------------------------------------------------
@@ -264,6 +326,37 @@ def main():
         print(f"  RESULT: SLIPPAGE_SIGN = {verdict!r}   ({nvotes}/2 checks agree)")
         print(f"  currently set to {config.SLIPPAGE_SIGN!r}"
               f"{'  -- correct' if agree else '   <-- CHANGE THIS'}")
+
+    # ---- 3b. reversion convention ----
+    rev_best = None
+    if "Rev30min" in raw.columns:
+        section("3b. REVERSION CONVENTION  (Rev30min)")
+        rev_best, rev_table = infer_reversion_sign(raw, named)
+        if isinstance(rev_table, pd.DataFrame) and len(rev_table):
+            print(rev_table.to_string(index=False))
+        elif rev_table:
+            print("\n".join(rev_table))
+        print("\n  Correct convention = the one where reversion RISES with size and")
+        print("  participation, because bigger and faster orders push the price")
+        print("  harder and it snaps back further. A negative score means the sign")
+        print("  is inverted; a score near zero means buys and sells are cancelling")
+        print("  (unsigned raw data).")
+        if rev_best:
+            agree = rev_best == config.REVERSION_SIGN
+            print(f"\n  RESULT: REVERSION_SIGN = {rev_best!r}")
+            print(f"  currently set to {config.REVERSION_SIGN!r}"
+                  f"{'  -- correct' if agree else '   <-- CHANGE THIS'}")
+
+        if schema.SIDE in named.columns:
+            vc = named[schema.SIDE].value_counts(dropna=False)
+            print(f"\n  side parsed: {vc.to_dict()}")
+            n_bad = int(named[schema.SIDE].isna().sum())
+            if n_bad:
+                unmapped = sorted(set(
+                    raw.loc[named[schema.SIDE].isna(), "Side"].astype(str)))[:8]
+                print(f"  WARNING: {n_bad:,} rows have an unrecognised Side value: "
+                      f"{unmapped}")
+                print("  Add them to BUY_TOKENS / SELL_TOKENS in config.py.")
 
     # ---- 4. magnitudes ----
     section("4. MAGNITUDE SANITY  (after unit conversion)")
