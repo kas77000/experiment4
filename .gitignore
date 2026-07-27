@@ -6,6 +6,8 @@ venv/
 env/
 .ipynb_checkpoints/
 
+other/
+
 # Generated outputs (thresholds/scored orders are reproducible via run.py)
 outputs/
 
