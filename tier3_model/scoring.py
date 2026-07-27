@@ -101,26 +101,10 @@ def add_scores(df: pd.DataFrame, preds: pd.DataFrame, cfg) -> pd.DataFrame:
     return out
 
 
-def threshold_table(scored: pd.DataFrame, by=None) -> pd.DataFrame:
-    """Make the per-order thresholds legible as a table.
-
-    Tier 3's threshold is not one number -- every order gets its own band, in
-    bps, predicted from its own size, spread, volatility, duration and urgency.
-    That is the point, but it means there is nothing to put on a slide. This
-    summarizes the realized bands by group so the surface can be read.
-
-    The `band_lo_p10` / `band_lo_p90` columns are the important ones: they show
-    how much the threshold MOVES inside a single cell. Tier 2 would have one
-    number there; the spread between them is the resolution Tier 3 buys you.
-    """
-    by = by or [schema.ALGO, schema.ADV_BUCKET]
-    by = [b for b in by if b in scored.columns]
-    if not by:
-        return pd.DataFrame()
-
-    g = scored.groupby(by, dropna=False)
-    out = pd.DataFrame({
-        "n": g.size(),
+def _band_stats(g: pd.DataFrame) -> dict:
+    """Summarize the per-order bands inside one slice."""
+    return {
+        "n": len(g),
         "median_spread_bps": g[schema.SPREAD_BPS].median(),
         "expected_bps": g["expected_bps"].median(),
         "band_lo_bps": g["band_lo_bps"].median(),
@@ -130,8 +114,54 @@ def threshold_table(scored: pd.DataFrame, by=None) -> pd.DataFrame:
         "band_lo_spreads": g["band_lo_spreads"].median(),
         "band_hi_spreads": g["band_hi_spreads"].median(),
         "flag_rate_pct": 100.0 * g["flagged"].mean(),
-    }).round(2)
-    return out.reset_index()
+    }
+
+
+def threshold_table(scored: pd.DataFrame, levels=None) -> pd.DataFrame:
+    """Make the per-order thresholds legible, at several levels of aggregation.
+
+    Tier 3's threshold is not one number -- every order gets its own band, in
+    bps, predicted from its own size, spread, volatility, duration and urgency.
+    That is the point, but it leaves nothing to put on a slide. This summarizes
+    the realized bands from the whole book down to algo x size bucket, so you
+    get a headline figure and the detail underneath it.
+
+    IMPORTANT: the aggregate rows DESCRIBE the fitted thresholds, they are not
+    thresholds you should apply. Using the ALL row as the gate for every order
+    would put you straight back at Tier 1, since it ignores the difficulty
+    adjustment that the whole model exists to make. Scoring always uses each
+    order's own band.
+
+    The `band_lo_p10` / `band_lo_p90` columns are what make that concrete: they
+    show how much the threshold MOVES inside a single row. Tier 2 would have one
+    number there; the spread between them is the resolution Tier 3 buys.
+    """
+    if levels is None:
+        levels = [[], [schema.ALGO], [schema.ADV_BUCKET],
+                  [schema.ALGO, schema.ADV_BUCKET]]
+        if schema.MARKET in scored.columns and scored[schema.MARKET].nunique() > 1:
+            levels.insert(2, [schema.MARKET])
+
+    key_cols = [schema.ALGO, schema.MARKET, schema.ADV_BUCKET]
+    key_cols = [c for c in key_cols if c in scored.columns]
+
+    rows = []
+    for by in levels:
+        by = [b for b in by if b in scored.columns]
+        if not by:
+            rows.append({"level": "ALL", **{c: None for c in key_cols},
+                         **_band_stats(scored)})
+            continue
+        label = " x ".join(by)
+        for keys, g in scored.groupby(by, dropna=False):
+            keys = keys if isinstance(keys, tuple) else (keys,)
+            rows.append({"level": label, **{c: None for c in key_cols},
+                         **dict(zip(by, keys)), **_band_stats(g)})
+
+    out = pd.DataFrame(rows)
+    num = [c for c in out.columns if c not in ["level"] + key_cols]
+    out[num] = out[num].astype(float).round(2)
+    return out
 
 
 def flag_rate_by_bucket(scored: pd.DataFrame) -> pd.DataFrame:

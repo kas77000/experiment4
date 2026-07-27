@@ -88,16 +88,18 @@ def main():
     print("  learn which orders were 'really' bad.")
 
     # ---------------- THE THRESHOLD ----------------
-    print("\n=== THE THRESHOLD, in bps ===")
-    print(report.frame(scoring.threshold_table(attributed)))
-    print("\n  There is no single threshold in Tier 3 -- every order gets its own,")
-    print("  predicted from its own size, spread, volatility, duration and urgency.")
-    print("  Per-order values are the band_lo_bps / band_hi_bps columns of")
-    print("  scored_orders.csv. The table above is the median band per group, so")
-    print("  the surface can be read.")
-    print("\n  band_lo_p10 vs band_lo_p90 is the point: that is how much the")
-    print("  threshold MOVES inside one cell. Tier 2 would have a single number")
-    print("  there for every order in the group.")
+    print("\n=== THE THRESHOLD ===")
+    tt = scoring.threshold_table(attributed)
+    print(report.frame(tt, max_rows=60))
+    print("\n  Every order gets its OWN band, predicted from its own size, spread,")
+    print("  volatility, duration and urgency -- see band_lo_bps / band_hi_bps in")
+    print("  scored_orders.csv. The rows above summarize those, from the whole")
+    print("  book (level=ALL) down to algo x size bucket.")
+    print("\n  The aggregate rows DESCRIBE the thresholds; they are not thresholds")
+    print("  to apply. Using the ALL row as the gate for every order is Tier 1 --")
+    print("  it throws away the difficulty adjustment the model exists to make.")
+    print("\n  band_lo_p10 vs band_lo_p90 shows how much the threshold MOVES inside")
+    print("  a single row. Tier 2 would have one number there for the whole group.")
 
     # ---------------- the queue ----------------
     print("\n=== Zone distribution ===")

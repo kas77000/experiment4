@@ -106,27 +106,41 @@ For any order:
 | `likely_cause` | what went wrong |
 | `remedy` | what to change |
 
-**Where is the threshold?** There is no single one. Every order gets its own,
-which is exactly what Tiers 1 and 2 cannot do. Per order it is
-`band_lo_bps`..`band_hi_bps`; summarised it is `threshold_table.csv`:
+**Where is the threshold?** Every order gets its own --- that is exactly what
+Tiers 1 and 2 cannot do. Per order it is `band_lo_bps`..`band_hi_bps`.
+`threshold_table.csv` summarises those at four levels, so you get a headline
+number *and* the detail underneath it:
 
 ```
-algo  adv_bucket     n  expected_bps  band_lo_bps  band_hi_bps  band_lo_p10  band_lo_p90  band_lo_spreads
-VWAP        <1%  2476         -5.56       -61.18        41.97      -112.17       -33.42            -5.72
-VWAP       1-5%  3430        -10.94       -66.89        35.55      -122.21       -36.39            -6.18
-VWAP      5-10%   470        -19.68       -78.16        26.92      -130.27       -43.23            -7.24
-VWAP     10-20%   143        -25.86       -79.43        16.33      -140.54       -47.26            -7.51
-VWAP       >20%    20        -45.17      -105.01         2.51      -188.34       -65.48           -10.61
+            level             algo adv_bucket      n  expected_bps  band_lo_bps  band_hi_bps  band_lo_p10  band_lo_p90  band_lo_spreads
+              ALL             None       None  11976         -8.72       -63.80        37.51      -117.93       -34.41            -6.01
+             algo             VWAP       None   6539         -9.04       -65.75        36.86      -120.57       -35.74            -6.11
+             algo  VWAP_Aggressive       None   1844        -15.81       -71.73        31.95      -128.25       -39.29            -6.92
+             algo     VWAP_Passive       None   3593         -4.74       -56.35        41.70      -104.50       -30.64            -5.41
+       adv_bucket             None        <1%   4566         -5.03       -59.03        42.41      -108.61       -31.77            -5.56
+       adv_bucket             None       1-5%   6258        -10.46       -65.19        36.37      -119.15       -35.56            -6.11
+       adv_bucket             None     10-20%    245        -25.86       -79.85        17.12      -147.01       -44.83            -7.95
+       adv_bucket             None      >20%      44        -42.15      -101.49         7.18      -169.89       -66.31            -9.15
+algo x adv_bucket             VWAP        <1%   2476         -5.56       -61.18        41.97      -112.17       -33.42            -5.72
+algo x adv_bucket             VWAP      >20%      20        -45.17      -105.01         2.51      -188.34       -65.48           -10.61
+                                                       ... 24 rows in total
 ```
 
-Read it as: *a VWAP order under 1% ADV is expected to lose about 5.6 bps, and is
-acceptable anywhere between −61 and +42 bps. The same algo above 20% ADV is
-expected to lose 45 bps and gets −105 to +2.5.*
+The headline: *across the whole book, a typical order is expected to lose about
+9 bps and is acceptable between −64 and +38 bps --- roughly 6 spreads either
+side.* Then it decomposes: a passive VWAP under 1% ADV gets −51, an aggressive
+VWAP above 20% ADV gets −114.
 
-`band_lo_p10` and `band_lo_p90` are the important pair: within the `<1%` cell
-alone the lower threshold ranges from **−112 to −33 bps** depending on each
-order's spread, volatility and duration. Tier 2 would put a single number there
-for all 2,476 orders. That range **is** the resolution Tier 3 buys.
+**One caveat that matters.** The aggregate rows *describe* the thresholds; they
+are not thresholds to apply. Using the `ALL` row as the gate for every order
+puts you straight back at Tier 1 --- it discards the difficulty adjustment the
+whole model exists to make. Scoring always uses each order's own band.
+
+`band_lo_p10` and `band_lo_p90` make that concrete: even within one row the
+threshold moves a lot. Across the whole book it ranges from **−34 to −118 bps**;
+inside the single `VWAP / <1% ADV` cell it still ranges from −33 to −112,
+depending on each order's spread, volatility and duration. Tier 2 would put one
+number there for all 2,476 orders. That range **is** the resolution Tier 3 buys.
 
 The band is fitted in units of `sigma_expected`, not of spread --- that is the
 volatility argument --- so `band_lo_spreads` is a presentation of the fitted
