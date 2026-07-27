@@ -298,7 +298,12 @@ def explain_order(row: pd.Series, model_fit, cause_model: CauseModel, cfg) -> st
                  f"   vol {row.get(schema.VOLATILITY, float('nan')):.0f}bps/day")
     lines.append(f"  actual {row[schema.SLIPPAGE_BPS]:+.1f} bps"
                  f"   vs expected {row['expected_bps']:+.1f} bps"
-                 f"   (band {row['band_lo_bps']:+.1f} .. {row['band_hi_bps']:+.1f})")
+                 f"   (band {row['band_lo_bps']:+.1f} .. {row['band_hi_bps']:+.1f} bps)")
+    if pd.notna(row.get("band_lo_spreads")):
+        lines.append(f"  in spreads: actual {row[schema.PERF_IN_SPREADS]:+.2f}"
+                     f"   vs expected {row['expected_spreads']:+.2f}"
+                     f"   (band {row['band_lo_spreads']:+.2f} .."
+                     f" {row['band_hi_spreads']:+.2f} spreads)")
     lines.append(f"  shortfall {row['residual_bps']:+.1f} bps"
                  f"   z = {row['z']:+.2f}"
                  f"   -> {row['zone']} / {row['severity']}")

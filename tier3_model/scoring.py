@@ -57,6 +57,16 @@ def add_scores(df: pd.DataFrame, preds: pd.DataFrame, cfg) -> pd.DataFrame:
     out["expected_bps"] = out["q_med"] * sig
     out["band_lo_bps"] = out["q_lo"] * sig
     out["band_hi_bps"] = out["q_hi"] * sig
+
+    # And in SPREADS, which is how a trader reads it ("two spreads through").
+    # Note the band is fitted in units of sigma_expected, not of spread -- that
+    # is the whole vol-aware argument, and it is why the same band is a
+    # different number of spreads on a fast order than on a slow one. These
+    # columns are a presentation of the fitted band, not a second threshold.
+    spr = out[schema.SPREAD_BPS].replace(0, np.nan)
+    out["expected_spreads"] = out["expected_bps"] / spr
+    out["band_lo_spreads"] = out["band_lo_bps"] / spr
+    out["band_hi_spreads"] = out["band_hi_bps"] / spr
     out["residual_bps"] = out[schema.SLIPPAGE_BPS] - out["expected_bps"]
 
     # The shortfall in actual money, which is what gets a meeting's attention.
@@ -89,6 +99,39 @@ def add_scores(df: pd.DataFrame, preds: pd.DataFrame, cfg) -> pd.DataFrame:
         out["material"] = True
     out["review_required"] = out["flagged"] & out["material"]
     return out
+
+
+def threshold_table(scored: pd.DataFrame, by=None) -> pd.DataFrame:
+    """Make the per-order thresholds legible as a table.
+
+    Tier 3's threshold is not one number -- every order gets its own band, in
+    bps, predicted from its own size, spread, volatility, duration and urgency.
+    That is the point, but it means there is nothing to put on a slide. This
+    summarizes the realized bands by group so the surface can be read.
+
+    The `band_lo_p10` / `band_lo_p90` columns are the important ones: they show
+    how much the threshold MOVES inside a single cell. Tier 2 would have one
+    number there; the spread between them is the resolution Tier 3 buys you.
+    """
+    by = by or [schema.ALGO, schema.ADV_BUCKET]
+    by = [b for b in by if b in scored.columns]
+    if not by:
+        return pd.DataFrame()
+
+    g = scored.groupby(by, dropna=False)
+    out = pd.DataFrame({
+        "n": g.size(),
+        "median_spread_bps": g[schema.SPREAD_BPS].median(),
+        "expected_bps": g["expected_bps"].median(),
+        "band_lo_bps": g["band_lo_bps"].median(),
+        "band_hi_bps": g["band_hi_bps"].median(),
+        "band_lo_p10": g["band_lo_bps"].quantile(0.10),
+        "band_lo_p90": g["band_lo_bps"].quantile(0.90),
+        "band_lo_spreads": g["band_lo_spreads"].median(),
+        "band_hi_spreads": g["band_hi_spreads"].median(),
+        "flag_rate_pct": 100.0 * g["flagged"].mean(),
+    }).round(2)
+    return out.reset_index()
 
 
 def flag_rate_by_bucket(scored: pd.DataFrame) -> pd.DataFrame:

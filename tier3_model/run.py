@@ -8,6 +8,7 @@ Outputs (all under outputs/tier3/):
     model_coefficients.csv   the fitted quantile surfaces
     calibration.csv          nominal vs realized band coverage, out-of-sample
     scored_orders.csv        every order with expected cost, z, zone, cause
+    threshold_table.csv      the fitted band in bps, summarised by group
     review_queue.csv         just what a human needs to look at, worst first
     slice_findings.csv       systematic effects that survive FDR correction
 """
@@ -19,7 +20,7 @@ import dataclasses
 import config as root_config
 from tca import dataset, evaluate, report, schema
 from tier3_model import (aggregate, config as t3cfg, cost_model, diagnostics,
-                         features, scoring)
+                         features, persist, scoring)
 
 
 def build(df, cfg, seed: int = 0):
@@ -86,6 +87,18 @@ def main():
     print("  This is the only validation available on real data, where you never")
     print("  learn which orders were 'really' bad.")
 
+    # ---------------- THE THRESHOLD ----------------
+    print("\n=== THE THRESHOLD, in bps ===")
+    print(report.frame(scoring.threshold_table(attributed)))
+    print("\n  There is no single threshold in Tier 3 -- every order gets its own,")
+    print("  predicted from its own size, spread, volatility, duration and urgency.")
+    print("  Per-order values are the band_lo_bps / band_hi_bps columns of")
+    print("  scored_orders.csv. The table above is the median band per group, so")
+    print("  the surface can be read.")
+    print("\n  band_lo_p10 vs band_lo_p90 is the point: that is how much the")
+    print("  threshold MOVES inside one cell. Tier 2 would have a single number")
+    print("  there for every order in the group.")
+
     # ---------------- the queue ----------------
     print("\n=== Zone distribution ===")
     print(report.zone_summary(attributed))
@@ -141,6 +154,13 @@ def main():
         coefs.to_csv(dataset.out_path("tier3", "model_coefficients.csv"))
     cost_model.coverage_check(df, preds, cfg).to_csv(
         dataset.out_path("tier3", "calibration.csv"), index=False)
+    scoring.threshold_table(attributed).to_csv(
+        dataset.out_path("tier3", "threshold_table.csv"), index=False)
+
+    # Freeze the fitted threshold so future orders can be scored against it
+    # without refitting. This is the artefact the whole exercise produces.
+    model_path = persist.save(model, cfg, dataset.out_path("tier3", "model.json"),
+                              df=df, scored=attributed)
 
     keep = [c for c in [schema.ORDER_ID, schema.ALGO, schema.BROKER, schema.SYMBOL,
                         schema.SIDE, schema.PCT_ADV, schema.PARTICIPATION,
@@ -148,6 +168,7 @@ def main():
                         schema.NOTIONAL, schema.SLIPPAGE_BPS,
                         schema.SIGMA_EXPECTED_BPS, schema.PERF_NORM,
                         "expected_bps", "band_lo_bps", "band_hi_bps",
+                        "band_lo_spreads", "band_hi_spreads", "expected_spreads",
                         "residual_bps", "shortfall_ccy", "z", "zone", "severity", "flagged",
                         "review_required", "likely_cause", "remedy"]
             if c in attributed.columns]
@@ -156,8 +177,13 @@ def main():
     if len(slices):
         slices.to_csv(dataset.out_path("tier3", "slice_findings.csv"), index=False)
 
-    print("\nWrote outputs/tier3/ -> model_coefficients.csv, calibration.csv,")
-    print("                        scored_orders.csv, review_queue.csv, slice_findings.csv")
+    print("\nWrote outputs/tier3/ -> model.json, model_coefficients.csv,")
+    print("                        calibration.csv, threshold_table.csv,")
+    print("                        scored_orders.csv, review_queue.csv,")
+    print("                        slice_findings.csv")
+    print(f"\nThreshold frozen to {model_path}")
+    print("Score future orders against it WITHOUT refitting:")
+    print("    python score_new.py next_quarter.csv")
 
 
 if __name__ == "__main__":
