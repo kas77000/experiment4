@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 
+import config as root_config
 from tca import dataset, evaluate, report, schema
 from tier3_model import (aggregate, config as t3cfg, cost_model, diagnostics,
                          features, scoring)
@@ -110,7 +111,8 @@ def main():
 
     # ---------------- causes ----------------
     print("\n=== Cause attribution across the review queue ===")
-    print(report.frame(diagnostics.cause_summary(attributed)))
+    print(report.frame(diagnostics.cause_summary(
+        attributed, currency=root_config.DATA.notional_currency)))
 
     conf = diagnostics.cause_confusion(attributed)
     if len(conf):
@@ -146,7 +148,7 @@ def main():
                         schema.NOTIONAL, schema.SLIPPAGE_BPS,
                         schema.SIGMA_EXPECTED_BPS, schema.PERF_NORM,
                         "expected_bps", "band_lo_bps", "band_hi_bps",
-                        "residual_bps", "z", "zone", "severity", "flagged",
+                        "residual_bps", "shortfall_ccy", "z", "zone", "severity", "flagged",
                         "review_required", "likely_cause", "remedy"]
             if c in attributed.columns]
     attributed[keep].to_csv(dataset.out_path("tier3", "scored_orders.csv"), index=False)

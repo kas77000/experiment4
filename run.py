@@ -27,6 +27,7 @@ import argparse
 
 import pandas as pd
 
+import config as root_config
 from tca import dataset, evaluate, report, schema
 from tier1_fixed import config as t1cfg, rules
 from tier2_percentile import config as t2cfg, thresholds
@@ -155,7 +156,8 @@ def main():
         print("  none significant")
 
     print("\n--- Cause attribution across the review queue ---")
-    print(report.frame(diagnostics.cause_summary(t3)))
+    print(report.frame(diagnostics.cause_summary(
+        t3, currency=root_config.DATA.notional_currency)))
     conf = diagnostics.cause_confusion(t3)
     if len(conf):
         print("\n  attributed vs KNOWN cause (synthetic only):")

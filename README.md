@@ -441,6 +441,24 @@ Wired for this extract:
 | `%POST` | passive fill share | percent -> fraction |
 | `%OPEN` + `%CLOSE` | auction share | summed, percent -> fraction |
 
+Notional is **USD** (`notional_currency` in `config.py`), which makes the bps
+shortfall convertible into actual cash:
+
+```
+shortfall = residual_bps / 10,000  x  notional
+```
+
+Every scored order carries a `shortfall_ccy` column, and the cause table is
+ranked by total money rather than order count --- ten orders costing $400k
+matter more than sixty costing $30k, and only the cash column says so:
+
+```
+                        orders   mean_z   mean_shortfall_bps    total_usd
+unexplained                 48    -4.02                -81.1   -2,713,857
+low_passive_unverified      45    -3.33                -80.4   -2,241,231
+missed_close                36    -3.52                -77.8   -1,471,786
+```
+
 **All six cost-model features are live**, and **two of four cause rules** work:
 `spread_bleed` (from `%POST`) and `missed_close` (from `%OPEN` + `%CLOSE`). Both
 attribute at 100% accuracy on labelled data.

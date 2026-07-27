@@ -59,6 +59,15 @@ def add_scores(df: pd.DataFrame, preds: pd.DataFrame, cfg) -> pd.DataFrame:
     out["band_hi_bps"] = out["q_hi"] * sig
     out["residual_bps"] = out[schema.SLIPPAGE_BPS] - out["expected_bps"]
 
+    # The shortfall in actual money, which is what gets a meeting's attention.
+    # Negative = cash lost against the order's own expectation. A -3 sigma miss
+    # on a small order and a -1.5 sigma miss on a large one can be ranked
+    # against each other here in a way no z-score allows.
+    if schema.NOTIONAL in out.columns:
+        out["shortfall_ccy"] = out["residual_bps"] / 10_000.0 * out[schema.NOTIONAL]
+    else:
+        out["shortfall_ccy"] = np.nan
+
     out["zone"] = np.select(
         [perf < out["q_lo"], perf > out["q_hi"]],
         [OUT_LOW, OUT_HIGH],

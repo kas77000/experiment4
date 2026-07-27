@@ -148,7 +148,7 @@ def generate(n: int = 12000, market: str = "HK", seed: int = 7,
             sign = rng.choice([-1.0, 1.0], size=k, p=[0.55, 0.45])
             slippage_bps[idx] += sign * rng.uniform(3.0, 8.0, k) * sigma_true[idx]
 
-    notional = np.round(rng.lognormal(15.0, 1.1, n), 0)   # HKD, median ~3.3m
+    notional = np.round(rng.lognormal(15.0, 1.1, n), 0)   # USD, median ~3.3m
 
     out = pd.DataFrame({
         "order_id": [f"HK{seed}{i:07d}" for i in range(n)],

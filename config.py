@@ -172,6 +172,12 @@ class DataConfig:
     # --- data quality filters (rows failing these are DROPPED, not flagged) ---
     min_spread_bps: float = 0.1         # spread must be positive & sane
     min_notional: float = 0.0           # drop dust orders below this notional
+
+    # Currency `$Mln` (and therefore `notional`) is denominated in. Used to
+    # label money columns and to convert a bps shortfall into actual cash:
+    #     shortfall = residual_bps / 10,000 x notional
+    # Any materiality gate you set must be in these units too.
+    notional_currency: str = "USD"
     max_abs_perf_spreads: float = 25.0  # |slippage/spread| beyond this = data error
 
     # --- the normalizing noise unit (Tier 3's denominator) -----------------

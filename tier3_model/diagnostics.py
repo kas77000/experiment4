@@ -181,22 +181,30 @@ def attribute(scored: pd.DataFrame, cause_model: CauseModel) -> pd.DataFrame:
     return out
 
 
-def cause_summary(attributed: pd.DataFrame) -> pd.DataFrame:
-    """Distribution of causes across the review queue -- the management view."""
+def cause_summary(attributed: pd.DataFrame, currency: str = "USD") -> pd.DataFrame:
+    """Distribution of causes across the review queue -- the management view.
+
+    Ranked by money, not by order count: ten orders that cost 40k between them
+    matter more than sixty that cost 5k, and only the cash column says so.
+    """
     flagged = attributed[attributed["flagged"]]
     if not len(flagged):
         return pd.DataFrame()
+
     g = flagged.groupby("likely_cause")
-    return pd.DataFrame({
+    out = pd.DataFrame({
         "orders": g.size(),
         "pct_of_flags": (100.0 * g.size() / len(flagged)).round(1),
         "mean_z": g["z"].mean().round(2),
         "mean_shortfall_bps": g["residual_bps"].mean().round(1),
-        "total_shortfall_bps_x_notional_m": (
-            (flagged["residual_bps"] * flagged.get(
-                schema.NOTIONAL, pd.Series(0, index=flagged.index)) / 1e6)
-            .groupby(flagged["likely_cause"]).sum().round(0)),
-    }).sort_values("orders", ascending=False)
+    })
+
+    if "shortfall_ccy" in flagged.columns and flagged["shortfall_ccy"].notna().any():
+        out[f"total_{currency.lower()}"] = g["shortfall_ccy"].sum().round(0)
+        out[f"median_{currency.lower()}"] = g["shortfall_ccy"].median().round(0)
+        return out.sort_values(f"total_{currency.lower()}")
+
+    return out.sort_values("orders", ascending=False)
 
 
 def cause_confusion(attributed: pd.DataFrame) -> pd.DataFrame:
