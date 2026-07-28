@@ -45,6 +45,13 @@ PASSIVE_FILL_PCT = "passive_fill_pct"  # fraction of qty filled passively (0-1)
 AUCTION_PCT = "auction_pct"            # fraction of qty done in auctions (0-1)
 MOMENTUM_BPS = "momentum_bps"          # market drift over the interval, signed vs your side
 
+# --- Tier 4 derived ------------------------------------------------------
+# Slippage exactly as the extract reported it, kept because Tier 4 overwrites
+# SLIPPAGE_BPS with the de-biased version.
+REPORTED_SLIPPAGE_BPS = "reported_slippage_bps"
+DILUTION_FACTOR = "dilution_factor"   # 1/(1-participation)
+DILUTION_CAPPED = "dilution_capped"   # participation exceeded the cap
+
 # --- derived (produced by the pipeline, never present in raw data) -------
 PERF_IN_SPREADS = "perf_in_spreads"      # Tier 1/2 metric: slippage / spread
 SIGMA_EXPECTED_BPS = "sigma_expected_bps"  # Tier 3 noise unit: spread & vol-time in quadrature

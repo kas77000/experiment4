@@ -259,7 +259,7 @@ def cause_accuracy(attributed: pd.DataFrame) -> pd.DataFrame:
 # single-order narrative
 # --------------------------------------------------------------------------
 
-def cost_drivers(row: pd.Series, model_fit, cfg, top: int = 4) -> pd.DataFrame:
+def cost_drivers(row: pd.Series, model_fit, cfg, top: int = 4, feats=None) -> pd.DataFrame:
     """Which features made this order expensive to begin with.
 
     Contribution_j = beta_med_j * x_std_j, in perf_norm units, converted to bps.
@@ -269,8 +269,9 @@ def cost_drivers(row: pd.Series, model_fit, cfg, top: int = 4) -> pd.DataFrame:
     if model_fit.backend != "quantreg":
         return pd.DataFrame()
 
+    feats = feats or features
     spec = model_fit.spec
-    X = features.design(row.to_frame().T, spec, cfg)[0]
+    X = feats.design(row.to_frame().T, spec, cfg)[0]
     beta = model_fit.coefs[model_fit.taus[1]]
     sig = float(row[schema.SIGMA_EXPECTED_BPS])
 
@@ -285,7 +286,8 @@ def cost_drivers(row: pd.Series, model_fit, cfg, top: int = 4) -> pd.DataFrame:
     return contrib.head(top).reset_index(drop=True)
 
 
-def explain_order(row: pd.Series, model_fit, cause_model: CauseModel, cfg) -> str:
+def explain_order(row: pd.Series, model_fit, cause_model: CauseModel, cfg,
+                  feats=None) -> str:
     """A paragraph a human can act on, for one flagged order."""
     lines = []
     oid = row.get(schema.ORDER_ID, "?")
@@ -308,7 +310,7 @@ def explain_order(row: pd.Series, model_fit, cause_model: CauseModel, cfg) -> st
                  f"   z = {row['z']:+.2f}"
                  f"   -> {row['zone']} / {row['severity']}")
 
-    drivers = cost_drivers(row, model_fit, cfg)
+    drivers = cost_drivers(row, model_fit, cfg, feats=feats)
     if len(drivers):
         bits = ", ".join(f"{r.feature} {r.contribution_bps:+.1f}bps"
                          for r in drivers.itertuples())

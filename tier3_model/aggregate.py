@@ -112,6 +112,94 @@ def slice_report(scored: pd.DataFrame, dimensions=None, min_n: int = 30) -> pd.D
     return out
 
 
+def dispersion_stats(scored: pd.DataFrame, by, min_n: int = 100) -> pd.DataFrame:
+    """Test whether a slice is more INCONSISTENT than the rest of the book.
+
+    This is the test that matters for schedule-following algos, and a mean test
+    cannot substitute for it. Bad volume-curve tracking does not bias a VWAP
+    order in a direction -- it widens the distribution. The order lands
+    somewhere random on a wider spread, so on average it looks fine.
+
+    Measured on the VWAP demo book, the injected curve-drift cohort has
+    mean z = -0.21 (small) but sd z = 1.36 against 0.49 for clean orders --
+    nearly 3x the dispersion, almost no shift in the mean. At broker level the
+    sloppiest broker gives t = -1.96 on the mean, which does NOT survive FDR
+    correction across ~40 slices, but Levene p = 1.3e-04 on the variance, which
+    clearly does.
+
+    Levene rather than an F-test, because it uses absolute deviations from the
+    group centre and so does not assume normality -- and z-scores from a
+    quantile fit have heavier tails than a normal.
+    """
+    by = [b for b in ([by] if isinstance(by, str) else by) if b in scored.columns]
+    if not by:
+        return pd.DataFrame()
+
+    z_all = scored["z"]
+    rows = []
+    for keys, g in scored.groupby(by, dropna=False):
+        if len(g) < min_n:
+            continue
+        keys = keys if isinstance(keys, tuple) else (keys,)
+        rest = z_all[~z_all.index.isin(g.index)].dropna()
+        gz = g["z"].dropna()
+        if len(gz) < min_n or len(rest) < min_n:
+            continue
+        try:
+            _, p = stats.levene(gz, rest)
+        except Exception:
+            p = np.nan
+        rest_sd = float(rest.std(ddof=1))
+        rows.append({
+            **dict(zip(by, keys)),
+            "n": len(gz),
+            "sd_z": float(gz.std(ddof=1)),
+            "mean_z": float(gz.mean()),
+            "mean_abs_z": float(gz.abs().mean()),
+            "sd_ratio": float(gz.std(ddof=1) / rest_sd) if rest_sd else np.nan,
+            "flag_rate_pct": 100.0 * g["flagged"].mean(),
+            "p_value": p,
+        })
+
+    out = pd.DataFrame(rows)
+    if not len(out):
+        return out
+
+    out["q_value"] = benjamini_hochberg(out["p_value"].to_numpy())
+    out["verdict"] = np.select(
+        [(out["q_value"] < 0.01) & (out["sd_ratio"] > 1),
+         (out["q_value"] < 0.05) & (out["sd_ratio"] > 1),
+         (out["q_value"] < 0.05) & (out["sd_ratio"] < 1)],
+        ["INCONSISTENT (strong)", "INCONSISTENT", "more consistent"],
+        default="no evidence")
+    out["dimension"] = " x ".join(by)
+    cols = ["dimension"] + by + ["n", "sd_z", "sd_ratio", "mean_z", "mean_abs_z",
+                                 "flag_rate_pct", "p_value", "q_value", "verdict"]
+    return out[cols].sort_values("sd_ratio", ascending=False)
+
+
+def dispersion_report(scored: pd.DataFrame, dimensions=None,
+                      min_n: int = 100) -> pd.DataFrame:
+    """Run the consistency test across every dimension and stack the results."""
+    dims = dimensions or [[schema.ALGO], [schema.BROKER], [schema.ADV_BUCKET],
+                          [schema.BROKER, schema.ALGO]]
+    frames = []
+    for by in dims:
+        s = dispersion_stats(scored, by, min_n=min_n)
+        if len(s):
+            frames.append(s.reset_index(drop=True))
+    if not frames:
+        return pd.DataFrame()
+
+    out = pd.concat(frames, ignore_index=True, sort=False)
+    for c in ["sd_z", "sd_ratio", "mean_z", "mean_abs_z", "flag_rate_pct"]:
+        out[c] = out[c].round(3)
+    for c in ["p_value", "q_value"]:
+        out[c] = out[c].map(lambda v: f"{v:.2e}" if pd.notna(v) and v < 1e-3
+                            else (round(v, 4) if pd.notna(v) else v))
+    return out
+
+
 def significant(slices: pd.DataFrame) -> pd.DataFrame:
     """Only the slices that survive FDR correction --- your actual findings list."""
     if not len(slices):

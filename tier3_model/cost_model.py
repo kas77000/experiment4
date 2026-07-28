@@ -136,8 +136,14 @@ def _predict_empirical(table: pd.DataFrame, df: pd.DataFrame) -> np.ndarray:
 # public API
 # --------------------------------------------------------------------------
 
-def fit(df: pd.DataFrame, cfg) -> ModelFit:
-    """Fit the conditional quantile surfaces on `df`."""
+def fit(df: pd.DataFrame, cfg, feats=None) -> ModelFit:
+    """Fit the conditional quantile surfaces on `df`.
+
+    `feats` is the feature module -- tier3_model.features by default, or
+    tier4_vwap.features for the VWAP-native design matrix. Both expose the
+    same fit_spec/design API, so the fitting machinery is shared.
+    """
+    feats = feats or features
     taus = (cfg.tau_lo, cfg.tau_med, cfg.tau_hi)
 
     y_all = df[schema.PERF_NORM].to_numpy(dtype=float)
@@ -161,10 +167,10 @@ def fit(df: pd.DataFrame, cfg) -> ModelFit:
             "backend='quantreg' requires statsmodels. `pip install statsmodels`, "
             "or set backend='auto' to fall back to empirical bands.")
 
-    spec = features.fit_spec(train, cfg)
+    spec = feats.fit_spec(train, cfg)
 
     if want_reg and can_reg:
-        X = features.design(train, spec, cfg)
+        X = feats.design(train, spec, cfg)
         y = train[schema.PERF_NORM].to_numpy(dtype=float)
         coefs, r1 = _fit_quantreg(X, y, taus)
         return ModelFit(spec=spec, taus=taus, coefs=coefs, backend="quantreg",
@@ -175,10 +181,11 @@ def fit(df: pd.DataFrame, cfg) -> ModelFit:
                     n_train=len(train), n_trimmed=n_trimmed, empirical=emp)
 
 
-def predict(model: ModelFit, df: pd.DataFrame, cfg) -> pd.DataFrame:
+def predict(model: ModelFit, df: pd.DataFrame, cfg, feats=None) -> pd.DataFrame:
     """Predicted (q_lo, q_med, q_hi) of perf_norm for each row, rearranged."""
+    feats = feats or features
     if model.backend == "quantreg":
-        X = features.design(df, model.spec, cfg)
+        X = feats.design(df, model.spec, cfg)
         preds = np.column_stack([X @ model.coefs[t] for t in model.taus])
     else:
         preds = _predict_empirical(model.empirical, df)
@@ -189,16 +196,17 @@ def predict(model: ModelFit, df: pd.DataFrame, cfg) -> pd.DataFrame:
     return pd.DataFrame(preds, index=df.index, columns=["q_lo", "q_med", "q_hi"])
 
 
-def cross_fit_predict(df: pd.DataFrame, cfg, seed: int = 0):
+def cross_fit_predict(df: pd.DataFrame, cfg, seed: int = 0, feats=None):
     """K-fold out-of-sample predictions plus a full-data model for future orders.
 
     Returns (preds, full_model). Every row in `preds` comes from a model that
     never saw that row, so the coverage numbers downstream are honest.
     """
-    full_model = fit(df, cfg)
+    feats = feats or features
+    full_model = fit(df, cfg, feats=feats)
 
     if cfg.n_folds is None or cfg.n_folds < 2:
-        return predict(full_model, df, cfg), full_model
+        return predict(full_model, df, cfg, feats=feats), full_model
 
     rng = np.random.default_rng(seed)
     fold = rng.integers(0, cfg.n_folds, size=len(df))
@@ -211,10 +219,10 @@ def cross_fit_predict(df: pd.DataFrame, cfg, seed: int = 0):
         if not len(test):
             continue
         if len(train) < cfg.min_fit_n:
-            preds.loc[test.index] = predict(full_model, test, cfg).to_numpy()
+            preds.loc[test.index] = predict(full_model, test, cfg, feats=feats).to_numpy()
             continue
-        m = fit(train, cfg)
-        preds.loc[test.index] = predict(m, test, cfg).to_numpy()
+        m = fit(train, cfg, feats=feats)
+        preds.loc[test.index] = predict(m, test, cfg, feats=feats).to_numpy()
 
     return preds, full_model
 

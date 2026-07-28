@@ -18,6 +18,15 @@ identical set of orders so the comparison is honest.
 | **Tier 1** | "did this order break the policy limit?" | `tier1_fixed/` |
 | **Tier 2** | "was this order in the worst 2% of similar orders?" | `tier2_percentile/` |
 | **Tier 3** | "did this order cost more than expected *for an order like it* --- and what went wrong?" | `tier3_model/` |
+| **Tier 4** | "for a VWAP order: did it track the volume curve, and is the benchmark even measuring it?" | `tier4_vwap/` |
+
+> **Measuring VWAP orders against interval VWAP? Start at
+> [`tier4_vwap/README.md`](tier4_vwap/README.md).** Tier 3 borrows its machinery
+> from market-impact models built for *arrival-price* benchmarks, and two of
+> their premises do not survive the change of benchmark: the benchmark moves
+> with you, and participation is an output of the volume curve rather than an
+> urgency choice. Tier 4 fixes both --- and finds a class of problem the mean-z
+> tests in Tier 3 structurally cannot see.
 
 ---
 
@@ -750,8 +759,9 @@ bucketed percentiles if `statsmodels` is not installed.
 check_extract.py       preflight: validate a file and infer its settings
 score_new.py           apply a frozen threshold to future orders
 config.py              shared data contract --- the only file you edit for real data
-synthetic_data.py      demo book with a documented generator + ground-truth labels
-run.py                 all three tiers, side by side
+synthetic_data.py      impact-shaped demo book (arrival-price DGP) + truth labels
+synthetic_vwap.py      VWAP-native demo book: volume curve, price path, schedule
+run.py                 Tiers 1-3, side by side
 tca/                   shared infrastructure, no thresholds of its own
   schema.py              canonical column names
   pipeline.py            load -> units -> clean -> metrics -> buckets
@@ -765,8 +775,11 @@ tier3_model/           Tier 3: cost model, z-scores, slice tests, cause attribut
   cost_model.py          quantile regression, cross-fitting, calibration
   scoring.py             residual z, zones, severity tiers, review gate
   persist.py             freeze/load the threshold + drift detection
-  aggregate.py           slice t-tests with false-discovery control
+  aggregate.py           slice tests: bias (t-test) and consistency (Levene)
   diagnostics.py         cause attribution + single-order narratives
+tier4_vwap/            Tier 4: VWAP-native thresholds
+  metric.py              the 1/(1-PR) de-biasing and the tracking-error scale
+  features.py            curve difficulty instead of impact
 ```
 
 Each tier folder has its own README with the method, the settings and its known
