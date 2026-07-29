@@ -82,6 +82,27 @@ is the point of the whole exercise --- see "Using it on future data" below.
 Running with no `--csv` uses a built-in synthetic book, which is how every number
 in this README was produced.
 
+**Look at the distribution before you read any threshold.**
+
+```bash
+python distribution.py your_file.csv                      # four figures + a summary table
+python distribution.py your_file.csv --by broker          # group by broker instead of algo
+python distribution.py outputs/tier4/scored_orders.csv --metric z
+```
+
+Writes PNGs to `outputs/distribution/`: the overall shape (split at the
+benchmark, with a density line), a box plot per algo/broker ordered worst median
+first, the same comparison as an ECDF, and the shape by %ADV bucket. It reads the
+file through the same `tca.pipeline` the tiers use, so the sign convention and
+units match what they fit on --- the left tail is underperformance on every plot,
+whatever your extract's own convention was.
+
+A threshold summarizes a shape. If the shape is bimodal, or its left tail is
+four orders wide, the summary is misleading and no statistic in the tier reports
+will say so. The x-axis is clipped at the 1st/99th percentile for readability
+(`--clip 0` for the full range); the data is never trimmed, and each figure
+states in its footnote how many orders fell outside the frame.
+
 ---
 
 ## Reading the results
@@ -757,6 +778,7 @@ bucketed percentiles if `statsmodels` is not installed.
 
 ```
 check_extract.py       preflight: validate a file and infer its settings
+distribution.py        seaborn plots of the performance distribution
 score_new.py           apply a frozen threshold to future orders
 config.py              shared data contract --- the only file you edit for real data
 synthetic_data.py      impact-shaped demo book (arrival-price DGP) + truth labels
