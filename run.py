@@ -1,25 +1,24 @@
-"""Run all three tiers on the SAME orders and compare them head to head.
+"""Run both methods on the SAME orders and compare them head to head.
 
     python run.py                    # synthetic HK VWAP demo
     python run.py --csv your.csv     # your real extract
-    python run.py --budget 3         # hold every tier to a 3% review queue
+    python run.py --budget 3         # hold both methods to a 3% review queue
 
-For a single tier with its full report, run that tier directly:
+For a single method with its full report, run it directly:
 
-    python -m tier1_fixed.run
-    python -m tier2_percentile.run
     python -m tier3_model.run
+    python -m tier5_gaussian.run
 
 The comparison has two halves, and the second is the one that matters.
 
-  "At each tier's own threshold" is how the tiers would actually behave in
-  production -- but it is not a fair test of METHOD, because the tiers flag
+  "At each method's own threshold" is how they would actually behave in
+  production -- but it is not a fair test of METHOD, because they flag
   different fractions of the book and recall rises trivially with queue size.
 
-  "At a matched review budget" fixes that: every tier ranks the entire book by
-  its own severity statistic, the top N% go to the queue, and we ask who filled
-  that fixed-size queue with real problems. That is a comparison of ranking
-  quality, independent of where anyone set their limit.
+  "At a matched review budget" fixes that: each method ranks the entire book
+  by its own severity statistic, the top N% go to the queue, and we ask who
+  filled that fixed-size queue with real problems. That is a comparison of
+  ranking quality, independent of where anyone set their limit.
 """
 
 from __future__ import annotations
@@ -29,23 +28,9 @@ import pandas as pd
 
 import config as root_config
 from tca import dataset, evaluate, report, schema
-from tier1_fixed import config as t1cfg, rules
-from tier2_percentile import config as t2cfg, thresholds
 from tier3_model import (aggregate, config as t3cfg, cost_model, diagnostics,
                          scoring)
-
-
-def run_tier1(df):
-    cfg = t1cfg.CONFIG
-    return rules.score(df, cfg), rules.describe(cfg)
-
-
-def run_tier2(df):
-    cfg = t2cfg.CONFIG
-    table = thresholds.fit(df, cfg)
-    model = thresholds.ThresholdModel(table, cfg)
-    lo, hi = cfg.range_percentiles
-    return model.score_frame(df), f"p{lo:g}/p{hi:g} bands on {cfg.metric}, in-sample"
+from tier5_gaussian import band, config as t5cfg, normality
 
 
 def run_tier3(df, seed: int):
@@ -56,7 +41,16 @@ def run_tier3(df, seed: int):
     attributed = diagnostics.attribute(scored, causes)
     desc = (f"quantile regression tau={cfg.tau_lo:g}/{cfg.tau_hi:g}, "
             f"{cfg.n_folds}-fold out-of-sample")
-    return attributed, desc, model, preds, cfg
+    return attributed, desc, preds, cfg
+
+
+def run_tier5(df):
+    cfg = t5cfg.CONFIG
+    table = band.fit(df, cfg)
+    model = band.BandModel(table, cfg)
+    desc = (f"mu +/- {cfg.k_sigma:g} sigma on {cfg.metric}, "
+            f"{cfg.estimator}, {cfg.score_level}, in-sample")
+    return model.score_frame(df), desc, table, cfg
 
 
 def main():
@@ -66,20 +60,18 @@ def main():
     args = ap.parse_args()
 
     df, clean_report = dataset.load_prepared(args)
-    print("\n=== Cleaning (shared by all tiers) ===")
+    print("\n=== Cleaning (shared by both methods) ===")
     print(clean_report.as_text())
 
-    t1, d1 = run_tier1(df)
-    t2, d2 = run_tier2(df)
-    t3, d3, model3, preds3, cfg3 = run_tier3(df, seed=args.seed)
-    tiers = [("Tier 1 fixed", t1, d1), ("Tier 2 percentile", t2, d2),
-             ("Tier 3 model", t3, d3)]
+    t3, d3, preds3, cfg3 = run_tier3(df, seed=args.seed)
+    t5, d5, table5, cfg5 = run_tier5(df)
+    methods = [("Tier 3 model", t3, d3), ("Tier 5 gaussian", t5, d5)]
 
-    # ---------------- behaviour at each tier's own threshold ----------------
-    print(report.header("1. AT EACH TIER'S OWN THRESHOLD"))
+    # ---------------- behaviour at each method's own threshold ----------------
+    print(report.header("1. AT EACH METHOD'S OWN THRESHOLD"))
     rows = []
-    for name, scored, desc in tiers:
-        r = {"tier": name, "rule": desc,
+    for name, scored, desc in methods:
+        r = {"method": name, "rule": desc,
              "flag_rate_pct": round(100 * scored["flagged"].mean(), 2),
              "review_pct": round(100 * scored["review_required"].mean(), 2)}
         r.update({k: round(v, 1) for k, v in
@@ -93,13 +85,13 @@ def main():
     order = [b for b in ["<1%", "1-5%", "5-10%", "10-20%", ">20%", "unknown"]
              if b in set(df[schema.ADV_BUCKET])]
     cal = pd.DataFrame({
-        name: (100 * scored.groupby(schema.ADV_BUCKET)["flagged"].mean())
-        for name, scored, _ in tiers
+        name: (100 * scored.groupby(schema.ADV_BUCKET, observed=False)["flagged"].mean())
+        for name, scored, _ in methods
     }).reindex(order).round(2)
-    cal.insert(0, "n", df.groupby(schema.ADV_BUCKET).size().reindex(order))
+    cal.insert(0, "n", df.groupby(schema.ADV_BUCKET, observed=False).size().reindex(order))
     print(report.frame(cal))
-    spread = (cal[[c for c in cal.columns if c != "n"]].max()
-              - cal[[c for c in cal.columns if c != "n"]].min()).round(2)
+    cols = [c for c in cal.columns if c != "n"]
+    spread = (cal[cols].max() - cal[cols].min()).round(2)
     print("\n  flag-rate spread across buckets (lower = better calibrated):")
     for k, v in spread.items():
         print(f"    {k:<20} {v:>6.2f} pp")
@@ -111,21 +103,21 @@ def main():
         print(report.header(f"3. AT A MATCHED {args.budget:g}% REVIEW BUDGET "
                             f"(the fair comparison)"))
         rows = []
-        for name, scored, _ in tiers:
+        for name, scored, _ in methods:
             s = evaluate.precision_at_budget(scored, args.budget)
             if s:
-                rows.append({"tier": name, "queue": s["queue"],
+                rows.append({"method": name, "queue": s["queue"],
                              "caught": s["caught"],
                              "precision_pct": round(s["precision_pct"], 1),
                              "recall_pct": round(s["recall_pct"], 1)})
         print(report.frame(pd.DataFrame(rows)))
         print(f"\n  {int(df[schema.TRUE_OUTLIER].sum()):,} orders in this book were "
-              f"genuinely broken. Each tier got the same")
+              f"genuinely broken. Each method got the same")
         print("  size queue; the difference is purely how well it ranked.")
 
         print("\n  recall by failure type, at the matched budget:")
         rec = {}
-        for name, scored, _ in tiers:
+        for name, scored, _ in methods:
             k = max(int(round(args.budget / 100 * len(scored))), 1)
             top = scored["rank_stat"].fillna(-1e18).nlargest(k).index
             pick = pd.Series(False, index=scored.index)
@@ -135,8 +127,20 @@ def main():
                          .groupby(real[schema.TRUE_CAUSE]).mean()).round(1)
         print(report.frame(pd.DataFrame(rec)))
 
+    # ---------------- does the Gaussian assumption hold? ----------------
+    print(report.header("4. DOES THE 3-SIGMA PROMISE HOLD?"))
+    headline = table5[table5["level"] == t5cfg.LEVEL_ALL].iloc[0]
+    c = headline[f"centre_{cfg5.estimator}"]
+    s = headline[f"scale_{cfg5.estimator}"]
+    x = df[cfg5.metric].to_numpy()
+    print(report.frame(normality.coverage_table(x, c, s).round(3)))
+    req = normality.required_k(x, c, s)
+    print(f"\n  To actually flag {100*normality.NOMINAL_OUTSIDE:.2f}% of this book"
+          f" you need k = {req['k_symmetric']:.2f}, not {cfg5.k_sigma:g}.")
+    print("  That gap is the cost of assuming a shape the data does not have.")
+
     # ---------------- what only Tier 3 gives you ----------------
-    print(report.header("4. WHAT ONLY TIER 3 PRODUCES"))
+    print(report.header("5. WHAT ONLY TIER 3 PRODUCES"))
 
     print("\n--- Out-of-sample calibration (the check that works on real data) ---")
     print(report.frame(cost_model.coverage_check(df, preds3, cfg3)))
@@ -148,9 +152,9 @@ def main():
                             schema.ADV_BUCKET, "n", "mean_z", "t_stat",
                             "q_value", "verdict"] if c in sig.columns]
         print(report.frame(sig[cols].head(12)))
-        print("\n  Tiers 1 and 2 cannot produce this table at all: without an")
-        print("  expected cost there is no residual to average, so a broker that")
-        print("  is consistently 0.2 sigma worse is indistinguishable from one")
+        print("\n  Tier 5 cannot produce this table at all: without an expected")
+        print("  cost there is no residual to average, so a broker that is")
+        print("  consistently 0.2 sigma worse is indistinguishable from one")
         print("  that simply got handed the harder orders.")
     else:
         print("  none significant")
@@ -171,11 +175,10 @@ def main():
         print("  That is the deliverable: not 'this order was bad', but which of")
         print("  four different problems it was, each with a different remedy.")
 
-    for name, scored, _ in tiers:
-        folder = {"Tier 1 fixed": "tier1", "Tier 2 percentile": "tier2",
-                  "Tier 3 model": "tier3"}[name]
+    for name, scored, _ in methods:
+        folder = {"Tier 3 model": "tier3", "Tier 5 gaussian": "tier5"}[name]
         scored.to_csv(dataset.out_path(folder, "scored_orders.csv"), index=False)
-    print("\nWrote outputs/tier{1,2,3}/scored_orders.csv")
+    print("\nWrote outputs/tier{3,5}/scored_orders.csv")
 
 
 if __name__ == "__main__":
