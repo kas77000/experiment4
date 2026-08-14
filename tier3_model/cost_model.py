@@ -139,9 +139,9 @@ def _predict_empirical(table: pd.DataFrame, df: pd.DataFrame) -> np.ndarray:
 def fit(df: pd.DataFrame, cfg, feats=None) -> ModelFit:
     """Fit the conditional quantile surfaces on `df`.
 
-    `feats` is the feature module -- tier3_model.features by default, or
-    tier4_vwap.features for the VWAP-native design matrix. Both expose the
-    same fit_spec/design API, so the fitting machinery is shared.
+    `feats` is the feature module -- tier3_model.features by default. Any
+    module exposing the same fit_spec/design API can be passed instead, so an
+    alternative design matrix can reuse the fitting machinery unchanged.
     """
     feats = feats or features
     taus = (cfg.tau_lo, cfg.tau_med, cfg.tau_hi)

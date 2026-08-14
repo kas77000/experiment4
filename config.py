@@ -22,9 +22,8 @@ SLIPPAGE_SIGN and the unit settings.
 
 Everything here is tier-agnostic. Each tier's own thresholds live in its folder:
 
-    tier1_fixed/config.py        fixed bps / spread-multiple limits
-    tier2_percentile/config.py   percentile band settings
     tier3_model/config.py        cost-model + z-score settings
+    tier5_gaussian/config.py     Gaussian mu +/- k*sigma band settings
 """
 
 from dataclasses import dataclass

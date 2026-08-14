@@ -1,14 +1,15 @@
-# Shared pipeline + Tier 1 + Tier 2
+# Shared pipeline + Tier 5 (Gaussian band)
 pandas>=2.0
 numpy>=1.24
 
 # Tier 3: quantile regression cost model, t-tests and BH correction
+# Tier 5: D'Agostino K2 normality test and the QQ plot
 scipy>=1.10
 statsmodels>=0.14
 # statsmodels is optional in practice -- tier3_model falls back to bucketed
 # empirical quantiles when it is absent (backend="auto"). scipy is required.
 
-# distribution.py only. Nothing in the scoring path imports these, so the tiers
-# still run in an environment without them.
+# distribution.py and the Tier 5 QQ plot only. Nothing in the scoring path
+# imports these, so both methods still run in an environment without them.
 seaborn>=0.13
 matplotlib>=3.7
