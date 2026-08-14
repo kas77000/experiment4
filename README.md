@@ -9,24 +9,19 @@ so both unusually *bad* orders and suspiciously *good* ones surface --- a result
 that looks too good is usually a data or benchmark error, and you want to know
 about those too.
 
-The same problem is solved three ways, in increasing order of what the market
-actually does. Each is self-contained in its own folder, and all three run on the
-identical set of orders so the comparison is honest.
+The same problem is solved two ways, and they answer different questions. Each
+is self-contained in its own folder, and both run on the identical set of orders
+so the comparison is honest.
 
 | | question it answers | folder |
 |---|---|---|
-| **Tier 1** | "did this order break the policy limit?" | `tier1_fixed/` |
-| **Tier 2** | "was this order in the worst 2% of similar orders?" | `tier2_percentile/` |
 | **Tier 3** | "did this order cost more than expected *for an order like it* --- and what went wrong?" | `tier3_model/` |
-| **Tier 4** | "for a VWAP order: did it track the volume curve, and is the benchmark even measuring it?" | `tier4_vwap/` |
+| **Tier 5** | "is this order beyond 3 standard deviations of the book?" | `tier5_gaussian/` |
 
-> **Measuring VWAP orders against interval VWAP? Start at
-> [`tier4_vwap/README.md`](tier4_vwap/README.md).** Tier 3 borrows its machinery
-> from market-impact models built for *arrival-price* benchmarks, and two of
-> their premises do not survive the change of benchmark: the benchmark moves
-> with you, and participation is an output of the volume curve rather than an
-> urgency choice. Tier 4 fixes both --- and finds a class of problem the mean-z
-> tests in Tier 3 structurally cannot see.
+> The tier numbers are historical. Tiers 1, 2 and 4 were removed; the numbering
+> was not reflowed, so git history and the frozen `outputs/tier3/model.json`
+> stay valid. Tier 5 is not more sophisticated than Tier 3 --- it is the
+> parametric alternative, and the two sections below say where each one wins.
 
 ---
 
@@ -50,15 +45,9 @@ exact settings to use. Accepts `.csv`, `.xlsx` and `.parquet`.
 **Step 2 --- run it.**
 
 ```bash
-python run.py --csv your_file.csv               # all three tiers, side by side
-python -m tier3_model.run --csv your_file.csv   # the full Tier 3 report
-```
-
-The other two individually, if you want their detail:
-
-```bash
-python -m tier1_fixed.run --csv your_file.csv
-python -m tier2_percentile.run --csv your_file.csv
+python run.py --csv your_file.csv                 # both methods, side by side
+python -m tier3_model.run --csv your_file.csv     # the full Tier 3 report
+python -m tier5_gaussian.run --csv your_file.csv  # the full Tier 5 report
 ```
 
 Useful variants:
@@ -87,7 +76,7 @@ in this README was produced.
 ```bash
 python distribution.py your_file.csv                      # four figures + a summary table
 python distribution.py your_file.csv --by broker          # group by broker instead of algo
-python distribution.py outputs/tier4/scored_orders.csv --metric z
+python distribution.py outputs/tier5/scored_orders.csv --metric z
 ```
 
 Writes PNGs to `outputs/distribution/`: the overall shape (split at the
@@ -107,7 +96,7 @@ states in its footnote how many orders fell outside the frame.
 
 ## Reading the results
 
-Everything lands in `outputs/tier1/`, `outputs/tier2/`, `outputs/tier3/`.
+Everything lands in `outputs/tier3/` and `outputs/tier5/`.
 
 | file | what it is | when to open it |
 |---|---|---|
@@ -163,13 +152,14 @@ VWAP above 20% ADV gets −114.
 
 **One caveat that matters.** The aggregate rows *describe* the thresholds; they
 are not thresholds to apply. Using the `ALL` row as the gate for every order
-puts you straight back at Tier 1 --- it discards the difficulty adjustment the
-whole model exists to make. Scoring always uses each order's own band.
+puts you straight back at Tier 5's global band --- it discards the difficulty
+adjustment the whole model exists to make. Scoring always uses each order's own
+band.
 
 `band_lo_p10` and `band_lo_p90` make that concrete: even within one row the
 threshold moves a lot. Across the whole book it ranges from **−34 to −118 bps**;
 inside the single `VWAP / <1% ADV` cell it still ranges from −33 to −112,
-depending on each order's spread, volatility and duration. Tier 2 would put one
+depending on each order's spread, volatility and duration. Tier 5 would put one
 number there for all 2,476 orders. That range **is** the resolution Tier 3 buys.
 
 The band is fitted in units of `sigma_expected`, not of spread --- that is the
@@ -327,96 +317,10 @@ should, with nothing to hand-tune. Dividing slippage by this gives a
 dimensionless number where 1.0 means "one typical move for an order like this".
 
 **2. Adjust for how hard the order was.** Even on a common scale, a 22%-ADV
-order is *supposed* to cost more than a 0.3% one. Tier 2 does this by grouping
-into size buckets; Tier 3 models it directly. This is the difference between
-measuring difficulty and measuring quality.
-
----
-
-## Tier 1 --- Fixed thresholds
-
-**One limit, applied to every order.**
-
-```
-flag if  |slippage|  >  50 bps
-```
-
-Three variants are available: an absolute bps limit, a multiple of the spread, or
-a multiple of `sigma_expected`. Plus a materiality gate, so no one writes a memo
-about a tiny order.
-
-**What it gets right.** It is trivially auditable, a compliance officer can check
-it by hand, and it needs no model to defend to a regulator. Most best-execution
-policies still say something like this in writing, and that is a legitimate
-choice.
-
-**Where it breaks.** The limit does not scale with difficulty, so it measures
-order size rather than execution quality:
-
-| order size (%ADV) | orders | % flagged |
-|---|---|---|
-| under 1% | 4,566 | 4.2% |
-| 1-5% | 6,258 | 5.4% |
-| 5-10% | 863 | 8.9% |
-| 10-20% | 245 | **17.6%** |
-| over 20% | 44 | **27.3%** |
-
-One order in four above 20% ADV is flagged; one in twenty-five below 1% ADV.
-Traders learn this within a quarter, and the report stops being read --- every
-flag has the same answer ready ("it was a big order").
-
-**Cheapest improvement:** switch the rule to `sigma_multiple`. Still one fixed
-number, but the yardstick now adapts to each order. Costs nothing, recovers most
-of the gap to Tier 2.
-
----
-
-## Tier 2 --- Percentile bands within peer groups
-
-**Rank each order against comparable orders; flag the tails.**
-
-1. Group comparable orders: same algo, same market, same size bucket.
-2. Within each group, take the 2nd and 98th percentiles of performance. Those two
-   numbers are the band.
-3. If a group has too few orders to be reliable (under 200), fall back to a wider
-   grouping: `algo x market`, then all orders.
-
-This is the vendor approach --- Abel Noser, Virtu/ITG and the other TCA universes
-sell exactly this, with the peer group drawn from a cross-industry database
-rather than your own history. Pass `--peer-csv` and this code does the same thing
-against a street extract, so you are ranked against the market instead of against
-your own past.
-
-**Why percentiles rather than "mean plus 2 standard deviations".** Execution cost
-distributions are skewed with fat tails. The mean and the standard deviation are
-both dragged around by the very outliers you are hunting --- a handful of
-disasters widens the band until it stops catching anything. Percentiles are
-robust: a few extreme values cannot move the 2nd percentile. They also produce a
-naturally lopsided band, which matches the real shape of the data, whereas
-"mean +/- 2 sd" forces a symmetry that is not there.
-
-**What it gets right.** The threshold now adapts to the peer group. The size
-gradient collapses from 23 percentage points to 3.
-
-**Where it breaks.**
-
-- **The band is a staircase.** Every order in the 1-5% bucket shares one
-  threshold, so a 1.1% order and a 4.9% order are held to the same standard, and
-  the threshold jumps at the bucket edge.
-- **You run out of data fast.** Each additional conditioning variable multiplies
-  the number of groups. With a 200-order minimum you can afford two or three
-  before the groups are too thin to trust. Tier 3 conditions on six things at
-  once.
-- **It grades on a curve.** The bands are fitted on the same orders being scored,
-  so 4% is flagged because 4% was *defined* as flagged. The number is guaranteed,
-  not earned.
-- **No expected cost, so no aggregation.** You cannot average a percentile rank
-  into "this broker is consistently worse". Systematic problems stay invisible.
-
-**One number worth knowing:** the default percentile choice determines the
-workload before you see any data. p10/p90 flags 20% of the book *by construction*
---- unworkable if a human justifies each one. This is set to p2/p98 (~4%), which
-is where production exception reports actually run.
+order is *supposed* to cost more than a 0.3% one. Tier 5 does not do this at all
+--- one band covers every order --- while Tier 3 models it directly. This is the
+difference between measuring difficulty and measuring quality, and it is the
+whole reason the two methods disagree.
 
 ---
 
@@ -446,9 +350,10 @@ Fit a formula predicting performance from the order's characteristics:
 The technique is **quantile regression**. Ordinary regression predicts an
 average; quantile regression predicts a *percentile*. Fitting it three times ---
 at the 2nd, 50th and 99th percentiles --- produces, for every individual order, a
-predicted median (the expected cost) and a predicted band around it. It is the
-Tier 2 idea with the bucket staircase replaced by a smooth surface, and with six
-conditioning variables instead of two.
+predicted median (the expected cost) and a predicted band around it. Where Tier
+5 fits two numbers to the whole book, this fits a smooth surface over six
+conditioning variables --- and it reads the percentiles off the data rather than
+assuming a shape they have to follow.
 
 ### Step 2 --- Score the residual
 
@@ -504,7 +409,7 @@ Two safeguards, both of which matter more than they sound.
 **Cross-fitting.** Every order is scored by a model that was fitted *without* it
 (the book is split into 5 parts; each part is scored by a model trained on the
 other 4). Without this, a band fitted and tested on the same orders always looks
-near-perfect. Tier 2 has this problem and cannot fix it.
+near-perfect. Tier 5 has this problem and cannot fix it.
 
 **Calibration.** On real data you never find out which orders were "really" bad,
 so you cannot measure accuracy directly. But you *can* check that a threshold set
@@ -579,68 +484,156 @@ would separate them --- rather than confidently prescribing "post more" for an
 order whose real fix is "trade slower".
 
 Rules trigger at percentiles of *your own book*, so nothing needs retuning for a
-different market or year. On the demo book, **92% of flagged real failures get
-the correct diagnosis**.
+different market or year. On the demo book, **90% of flagged real failures get
+the correct diagnosis** (138 of 153).
+
+---
+
+## Tier 5 --- Gaussian 3-sigma band
+
+**Fit a normal distribution to the book; accept everything within three standard
+deviations.**
+
+```
+1. take the pVWAP slippage for every order:  x1 .. xn
+2. estimate mu and sigma
+3. the range is  mu - 3*sigma .. mu + 3*sigma
+4. anything outside is flagged
+```
+
+`k = 3` is not arbitrary. Under a normal distribution 99.73% of observations
+fall within +/- 3 sigma, so choosing `k` is choosing a flag rate: **0.27% of
+orders, about 1 in 370**. The threshold arrives with a promise attached, before
+anyone has looked at data. That is the appeal --- two numbers, one formula, no
+model, recomputable in a spreadsheet.
+
+On the demo book the headline is `-83.88 .. +61.00` bps.
+
+**Whether the promise holds is measured, not assumed.**
+
+```
+   k  promised_inside_pct  actual_inside_pct  promised_outside_pct  actual_outside_pct    ratio  n_outside
+ 1.0               68.269             78.908                31.731              21.092    0.665       2526
+ 2.0               95.450             95.274                 4.550               4.726    1.039        566
+ 3.0               99.730             98.330                 0.270               1.670    6.186        200
+ 4.0               99.994             99.324                 0.006               0.676  106.777         81
+```
+
+At `k = 3` the band flags **1.67%** where it promised 0.27% --- **6.2x** the
+queue you would have staffed for. Read the `k = 1` row next to it: 78.9% of
+orders sit within one sigma where a normal puts 68.3%. The book is *more*
+concentrated in the middle and *fatter* in the tails at once. That is the
+leptokurtic shape, and it is precisely what two parameters cannot describe.
+
+```
+  To actually flag 0.27% of this book you need k = 5.03, not 3.
+  Per tail: k_lo = 5.70, k_hi = 4.09.
+
+  skew               -0.958   (0 if normal)
+  excess kurtosis     9.509   (0 if normal)
+```
+
+`k_lo` and `k_hi` differ by 1.6 sigma. No single `k` serves both tails, because
+the band is symmetric and the data is not.
+
+**The standard deviation is inflated by the outliers it is hunting.** Both
+estimators are always reported --- `mean +/- k*sd`, and `median +/- k*1.4826*MAD`.
+The `1.4826` is `1 / Phi^-1(0.75)`, which makes the scaled MAD a consistent
+estimator of sigma *under normality*, so on normal data the two agree exactly
+and any gap between them is the non-normality:
+
+```
+  centre_classical  scale_classical  lo_classical  hi_classical  centre_robust  scale_robust  lo_robust  hi_robust
+            -11.44            24.15        -83.88         61.00          -9.32         17.12     -60.69      42.05
+
+  sd is 1.41x the robust scale.
+```
+
+Every extreme order widens the band that is supposed to catch it. Scoring on
+the robust estimator instead flags 4.3% of the book rather than 1.7%.
+
+**Where it breaks.**
+
+- **Symmetric by construction**, while slippage is skewed at -0.96. The two
+  tails cannot both be served.
+- **One band does not adjust for difficulty.** The flag rate climbs from 1.62%
+  under 1% ADV to 6.82% above 20%. `--score-level algo_x_adv_bucket` flattens
+  the small buckets and leaves the large ones untouched --- those cells hold 6
+  to 143 orders, fall below `min_group_n`, and correctly fall back to the
+  global band. The buckets that most need their own threshold are the ones
+  without enough orders to fit one. Conditioning harder runs out of data first;
+  Tier 3's answer is to fit a surface instead of counting cells.
+- **Fitted and scored on the same orders**, so 1.67% is partly circular.
+  Tier 3 reports out-of-sample via cross-fitting; this tier cannot.
+- **No expected cost, so no aggregation.** A broker who is consistently
+  slightly worse is invisible here.
+
+`--self-check` runs the method on 200,000 draws from a known normal and
+confirms it recovers the parameters and delivers 0.27% exactly. So the numbers
+above are a property of the data, not of the code.
+
+Full detail in [`tier5_gaussian/README.md`](tier5_gaussian/README.md).
 
 ---
 
 ## Evidence
 
 12,000 synthetic orders, of which 444 were *genuinely* broken --- the generator
-records which ones and why, so the tiers can be scored rather than argued about.
-Nothing is tuned to favour a tier; the failure types and hidden broker/algo
-effects are written down in `synthetic_data.py`.
+records which ones and why, so the methods can be scored rather than argued
+about. Nothing is tuned to favour either one; the failure types and hidden
+broker/algo effects are written down in `synthetic_data.py`. Every number below
+comes from `python run.py`.
 
 **Is the threshold calibrated?** A good threshold flags roughly the same share of
 easy and hard orders. Anything else means it is measuring difficulty.
 
-| order size | Tier 1 | Tier 2 | Tier 3 |
+| order size | orders | Tier 3 | Tier 5 |
 |---|---|---|---|
-| under 1% ADV | 4.2% | 4.1% | 3.3% |
-| 1-5% | 5.4% | 4.1% | 2.9% |
-| 5-10% | 8.9% | 4.5% | 3.1% |
-| 10-20% | 17.6% | 7.4% | 3.7% |
-| over 20% | 27.3% | 6.8% | 2.3% |
-| **spread (lower is better)** | **23.1 pts** | **3.3 pts** | **1.4 pts** |
+| under 1% ADV | 4,566 | 1.75% | 1.62% |
+| 1-5% | 6,258 | 1.44% | 1.49% |
+| 5-10% | 863 | 1.85% | 2.20% |
+| 10-20% | 245 | 2.86% | 4.49% |
+| over 20% | 44 | 2.27% | 6.82% |
+| **spread (lower is better)** | | **1.42 pp** | **5.33 pp** |
 
-**Which one ranks orders best?** Each tier gets the *same* 3% review queue and
-fills it with its own worst orders. This removes the size of the queue as a
-variable --- otherwise a tier that flags more always looks better at catching
-things.
+Tier 5's flag rate quadruples across the size range. One band for the whole book
+cannot adjust for difficulty, so the largest orders are flagged mostly for being
+large --- the failure that makes an exception report stop being read, because
+every flag has the same answer ready.
+
+**Which one ranks orders best?** Each method gets the *same* 3% review queue and
+fills it with its own worst orders. This removes queue size as a variable ---
+otherwise a method that flags more always looks better at catching things.
 
 | | queue | real problems caught | precision | recall |
 |---|---|---|---|---|
-| Tier 1 fixed | 359 | 188 | 52.4% | 42.3% |
-| Tier 2 percentile | 359 | 116 | 32.3% | 26.1% |
-| **Tier 3 model** | 359 | **242** | **67.4%** | **54.5%** |
+| Tier 5 gaussian | 359 | 185 | 51.5% | 41.7% |
+| **Tier 3 model** | 359 | **237** | **66.0%** | **53.4%** |
 
-For the same amount of analyst time, Tier 3 puts **29% more real problems** in
-front of them than the fixed limit, and more than double what the percentile
-bands manage.
+For the same amount of analyst time, Tier 3 puts **28% more real problems** in
+front of them.
 
-**Diagnosis quality**, Tier 3 only:
+**What each one catches**, at the matched budget:
+
+| the real problem was | Tier 3 | Tier 5 |
+|---|---|---|
+| benchmark/data error | 94.4% | 75.6% |
+| missed the close | 51.1% | 27.7% |
+| traded too aggressively | 46.4% | 45.0% |
+| spread bleed | 32.5% | 23.3% |
+
+The gap is narrowest on `over_aggressive`, which is the failure that shows up as
+a large raw number, and widest on `missed_close`, which does not. A method with
+no expected cost can only find orders that look extreme in absolute terms.
+
+**Diagnosis quality**, Tier 3 only --- Tier 5 produces no cause at all:
 
 | the real problem was | flagged | diagnosed correctly |
 |---|---|---|
-| traded too aggressively | 56 | 100% |
-| missed the close | 45 | 95.6% |
-| spread bleed | 42 | 90.5% |
-| benchmark/data error | 84 | 85.7% |
-
-### An honest result worth reading twice
-
-Tier 2 scores *worse* than Tier 1 above, which is not what the ordering implies.
-The cause is the denominator, not the method:
-
-```bash
-python -m tier2_percentile.run                      # F1 27.3%  (divide by spread)
-python -m tier2_percentile.run --metric perf_norm   # F1 54.1%  (divide by sigma_expected)
-```
-
-Identical logic, identical percentiles --- **double the score**, purely from
-normalizing by the right thing. Choosing what to divide by matters at least as
-much as choosing how to set the band, and it is much the cheaper of the two
-fixes.
+| traded too aggressively | 31 | 100% |
+| missed the close | 25 | 100% |
+| spread bleed | 19 | 84.2% |
+| benchmark/data error | 78 | 84.6% |
 
 ---
 
@@ -782,16 +775,13 @@ distribution.py        seaborn plots of the performance distribution
 score_new.py           apply a frozen threshold to future orders
 config.py              shared data contract --- the only file you edit for real data
 synthetic_data.py      impact-shaped demo book (arrival-price DGP) + truth labels
-synthetic_vwap.py      VWAP-native demo book: volume curve, price path, schedule
-run.py                 Tiers 1-3, side by side
+run.py                 both methods, side by side
 tca/                   shared infrastructure, no thresholds of its own
   schema.py              canonical column names
   pipeline.py            load -> units -> clean -> metrics -> buckets
-  dataset.py             CLI to prepared frame (so every tier scores the same rows)
+  dataset.py             CLI to prepared frame (so both methods score the same rows)
   evaluate.py            precision/recall, including the matched-budget comparison
   report.py              shared formatting
-tier1_fixed/           Tier 1: fixed limits
-tier2_percentile/      Tier 2: percentile bands, own history or a peer universe
 tier3_model/           Tier 3: cost model, z-scores, slice tests, cause attribution
   features.py            the design matrix (square-root law)
   cost_model.py          quantile regression, cross-fitting, calibration
@@ -799,13 +789,13 @@ tier3_model/           Tier 3: cost model, z-scores, slice tests, cause attribut
   persist.py             freeze/load the threshold + drift detection
   aggregate.py           slice tests: bias (t-test) and consistency (Levene)
   diagnostics.py         cause attribution + single-order narratives
-tier4_vwap/            Tier 4: VWAP-native thresholds
-  metric.py              the 1/(1-PR) de-biasing and the tracking-error scale
-  features.py            curve difficulty instead of impact
+tier5_gaussian/        Tier 5: Gaussian mu +/- 3 sigma band
+  band.py                fit both estimators per group, score orders
+  normality.py           coverage, required-k, shape statistics, QQ plot
 ```
 
-Each tier folder has its own README with the method, the settings and its known
-weaknesses.
+Both tier folders have their own README with the method, the settings and their
+known weaknesses.
 
 ## Known limits
 
@@ -822,3 +812,7 @@ weaknesses.
 - **Session length is set to HK's 330 minutes.** If you trade several venues this
   is a mild misspecification for the others; it enters inside a square root and
   the duration feature absorbs a constant proportional error.
+- **Tier 5's normality assumption does not hold on this data**, and the report
+  says so rather than hiding it: 3 sigma flags 1.67% where it promises 0.27%.
+  Use it when an auditable two-number rule is the requirement, not when you want
+  the flag rate the normal table advertises.
