@@ -89,6 +89,13 @@ def save(est: dict, cfg, path: str, *, region: str, strategy: str,
         "metric_units": t5cfg.units_of(cfg.metric),
         "estimator": cfg.estimator,
         "k_sigma": float(cfg.k_sigma),
+        # How k was arrived at. A band at k = 5.9 must not read as somebody's
+        # arbitrary guess six months from now: either it is the config default
+        # or it is the k that delivered a stated review load on this cell.
+        "k_source": ("target_flag_rate" if cfg.target_flag_rate is not None
+                     else "fixed"),
+        "target_flag_rate": (float(cfg.target_flag_rate)
+                             if cfg.target_flag_rate is not None else None),
         "n": int(est["n"]),
         # the pair that scores
         "centre": _f(est[f"centre_{e}"]), "scale": _f(est[f"scale_{e}"]),

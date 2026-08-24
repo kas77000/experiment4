@@ -50,14 +50,23 @@ def n_sigma_outside(x, lo: float, hi: float, scale: float):
 
 
 def score_frame(df, base_cfg, *, bands_dir: str, out_dir: str,
-                label: str | None = None) -> list[dict]:
-    """Score every cell in `df` against its frozen band."""
+                label: str | None = None,
+                min_notional_review: float | None = None) -> list[dict]:
+    """Score every cell in `df` against its frozen band.
+
+    `min_notional_review` overrides the materiality gate frozen with the band.
+    The band is a measurement and must not move; how much of the queue the desk
+    chooses to work is a policy, and policies change without invalidating the
+    measurement. Left as None, the frozen value applies so a rescore of the
+    same band reproduces the same queue.
+    """
     results = []
     for region, strategy, g in cells.cells(df):
         period = label or cells.period_label(g) or "score"
         path = cells.band_path(bands_dir, region, strategy)
         row = {"region": region, "strategy": strategy, "n": int(len(g)),
-               "period": period, "n_flagged": 0,
+               "period": period, "n_flagged": 0, "n_review": 0,
+               "min_notional_review": 0.0,
                "flag_rate_pct": float("nan"), "fit_flag_rate_pct": float("nan"),
                "lo": float("nan"), "hi": float("nan"),
                "skipped": False, "reason": "", "out_dir": None,
@@ -115,8 +124,26 @@ def score_frame(df, base_cfg, *, bands_dir: str, out_dir: str,
         scored["n_sigma_outside"] = n_sigma_outside(x, lo, hi, scale)
         scored["flagged"] = scored["zone"].isin(list(band.FLAGGED))
 
+        # Materiality. Being outside the band and being worth an analyst's
+        # hour are different questions: a 3-spread miss on a $40k order costs
+        # almost nothing to fix. The gate shrinks the QUEUE without hiding
+        # anything -- every flagged order still appears in outliers.csv, it
+        # just carries review_required=False.
+        gate = float(min_notional_review
+                     if min_notional_review is not None
+                     else (getattr(cfg, "min_notional_review", 0.0) or 0.0))
+        if gate > 0 and schema.NOTIONAL in scored.columns:
+            scored["material"] = (pd.to_numeric(scored[schema.NOTIONAL],
+                                                errors="coerce")
+                                  .fillna(np.inf) >= gate)
+        else:
+            scored["material"] = True
+        scored["review_required"] = scored["flagged"] & scored["material"]
+
         row["lo"], row["hi"] = lo, hi
         row["n_flagged"] = int(scored["flagged"].sum())
+        row["n_review"] = int(scored["review_required"].sum())
+        row["min_notional_review"] = gate
         row["flag_rate_pct"] = 100.0 * float(scored["flagged"].mean())
         row["fit_flag_rate_pct"] = reference.get("flag_rate_pct", float("nan"))
 
@@ -126,7 +153,8 @@ def score_frame(df, base_cfg, *, bands_dir: str, out_dir: str,
 
         keep = [c for c in (IDENT_COLS
                             + ["zone", cfg.metric, schema.SLIPPAGE_BPS,
-                               "band_lo", "band_hi", "n_sigma_outside"]
+                               "band_lo", "band_hi", "n_sigma_outside",
+                               "review_required"]
                             + DIAGNOSTIC_COLS) if c in scored.columns]
         keep = list(dict.fromkeys(keep))
 
@@ -159,6 +187,12 @@ def main():
     ap.add_argument("--out-dir", default="outputs")
     ap.add_argument("--label", default=None,
                     help="Name the period folder. Defaults to the Date range.")
+    ap.add_argument("--min-notional-review", type=float, default=None,
+                    metavar="AMOUNT",
+                    help="Only queue flagged orders at least this large for "
+                         "review. Overrides the gate frozen with the band; the "
+                         "band itself does not move. Every flagged order still "
+                         "appears in outliers.csv, marked review_required.")
     args = ap.parse_args()
 
     df, clean_report = dataset.load_prepared(args)
@@ -169,7 +203,8 @@ def main():
 
     try:
         results = score_frame(df, t5cfg.CONFIG, bands_dir=args.bands_dir,
-                              out_dir=args.out_dir, label=args.label)
+                              out_dir=args.out_dir, label=args.label,
+                              min_notional_review=args.min_notional_review)
     except LeakageError as exc:
         # A traceback here would read as a crash. It is a refusal, and the
         # reason matters more than the stack.
@@ -197,6 +232,9 @@ def main():
         print(f"    {r['period']}:    {r['n']:,} orders, {r['n_flagged']} flagged, "
               f"{r['flag_rate_pct']:.2f}% outside"
               + (f"   <- {ratio:.1f}x" if np.isfinite(ratio) else ""))
+        if r["min_notional_review"] > 0:
+            print(f"    to review:  {r['n_review']} of those clear the "
+                  f"{r['min_notional_review']:,.0f} materiality gate")
         print(f"    wrote {r['out_dir']}")
         if r["drift_warnings"]:
             print("\n    Drift:")
