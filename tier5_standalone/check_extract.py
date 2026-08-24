@@ -422,9 +422,11 @@ def main():
           f"   <- set for the market you trade most")
     print(f"    DataConfig.default_duration_min = {config.DATA.default_duration_min}"
           f"   <- assumption; no duration column present")
-    print("\n  Then:")
-    print("    python run.py --csv " + args.path)
-    print("    python -m tier3_model.run --csv " + args.path)
+    print("\n  Then, to freeze a band on this extract and score a later one:")
+    print("    python -m tier5.fit   --csv " + args.path)
+    print("    python -m tier5.score --csv <a later period>.csv")
+    print("\n  Or to explore the band on this extract alone:")
+    print("    python -m tier5.run --csv " + args.path)
 
 
 if __name__ == "__main__":
