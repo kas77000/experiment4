@@ -142,6 +142,18 @@ def main():
     summary.to_csv(dest, index=False)
     print(f"\nWrote {dest}")
 
+    # A region code that is not in REGION_NAMES is usually a new venue -- but it
+    # is also exactly what a typo'd Sym suffix looks like, and that would create
+    # a phantom cell with its own band. Say so here as well as in tier5.fit:
+    # batch is the path people use when they are adding regions.
+    unknown = sorted({r["region"] for r in results
+                      if r["region"] not in config.REGION_NAMES})
+    if unknown:
+        print(f"\n  Unrecognised region code(s): {unknown}")
+        print("  They were processed normally. If one of those is a typo in the")
+        print("  Sym suffix rather than a new venue, it has just been given its")
+        print("  own band -- add real ones to REGION_NAMES in config.py.")
+
     leakage = [f for f in failures if f.get("kind") == "leakage"]
     errors = [f for f in failures if f.get("kind") != "leakage"]
 

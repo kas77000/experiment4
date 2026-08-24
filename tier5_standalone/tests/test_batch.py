@@ -137,3 +137,36 @@ def test_broken_file_is_tagged_as_error_not_leakage(tmp_path):
                             bands_dir=str(tmp_path / "bands"),
                             out_dir=str(tmp_path / "outputs"), cfg=t5cfg.CONFIG)
     assert failures[0]["kind"] == "error"
+
+
+def test_unrecognised_region_is_reported_in_batch(tmp_path, capsys):
+    """A typo'd Sym suffix must not create a silent phantom cell."""
+    import sys
+    _write(str(tmp_path / "year" / "ZZ" / "VWAP.csv"),
+           "ZZ", "VWAP", 400, -10.0, 20.0, "2025-06-02", 1)
+    argv = sys.argv
+    sys.argv = ["batch", "fit", "--dir", str(tmp_path / "year"),
+                "--bands-dir", str(tmp_path / "bands"),
+                "--out-dir", str(tmp_path / "outputs")]
+    try:
+        batch.main()
+    finally:
+        sys.argv = argv
+    out = capsys.readouterr().out
+    assert "Unrecognised region" in out
+    assert "ZZ" in out
+
+
+def test_known_region_produces_no_warning(tmp_path, capsys):
+    import sys
+    _write(str(tmp_path / "year" / "HK" / "VWAP.csv"),
+           "HK", "VWAP", 400, -10.0, 20.0, "2025-06-02", 1)
+    argv = sys.argv
+    sys.argv = ["batch", "fit", "--dir", str(tmp_path / "year"),
+                "--bands-dir", str(tmp_path / "bands"),
+                "--out-dir", str(tmp_path / "outputs")]
+    try:
+        batch.main()
+    finally:
+        sys.argv = argv
+    assert "Unrecognised region" not in capsys.readouterr().out
