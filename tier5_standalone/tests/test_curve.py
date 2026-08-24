@@ -89,3 +89,19 @@ def test_offscreen_orders_are_still_counted_in_the_caption(tmp_path):
                      path=str(tmp_path / "c.png"), title="t")
     assert "Wrote" in msg
     assert os.path.exists(str(tmp_path / "c.png"))
+
+
+def test_normal_label_defaults_to_fitted(tmp_path, sample):
+    """Default wording is right for fit, where the normal really is fitted."""
+    import inspect
+    assert inspect.signature(curve.plot).parameters["normal_label"].default \
+        == "fitted normal"
+
+
+def test_normal_label_is_overridable(tmp_path, sample):
+    """Score must be able to say the curve is frozen, not refitted."""
+    msg = curve.plot(sample, centre=-10.0, scale=20.0, lo=-70.0, hi=50.0,
+                     path=str(tmp_path / "c.png"), title="t",
+                     normal_label="frozen band's normal")
+    assert os.path.exists(str(tmp_path / "c.png"))
+    assert "Wrote" in msg

@@ -124,3 +124,15 @@ def test_n_sigma_outside_is_zero_free_and_positive(frozen):
     scored = pd.read_csv(os.path.join(res[0]["out_dir"], "scored.csv"))
     inside = scored[scored["zone"] == "IN_RANGE"]
     assert (inside["n_sigma_outside"] == 0).all()
+
+
+def test_score_curve_is_labelled_frozen_not_fitted(frozen):
+    """The dashed curve on a score chart is the frozen band, not a refit.
+
+    Mislabelling it would suggest the band adapts to each period, which is the
+    opposite of what this whole workflow does.
+    """
+    import inspect
+    src = inspect.getsource(score.score_frame)
+    assert "normal_label=\"frozen band's normal\"" in src
+    assert "NOT a refit" in src

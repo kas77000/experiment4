@@ -38,8 +38,14 @@ def view_range(x, lo: float, hi: float, scale: float) -> tuple[float, float]:
 
 def plot(x, *, centre: float, scale: float, lo: float, hi: float,
          path: str, title: str, subtitle: str | None = None,
-         k: float = 3.0) -> str:
-    """Write the curve. Returns the line to print (never raises on a missing lib)."""
+         k: float = 3.0, normal_label: str = "fitted normal") -> str:
+    """Write the curve. Returns the line to print (never raises on a missing lib).
+
+    `normal_label` names the dashed curve. It matters: at fit time the normal IS
+    fitted to the data underneath it, but at score time it is the FROZEN band's
+    normal drawn over a different period's data. Calling both "fitted" would
+    suggest the band adapts to each period, which is exactly what it does not do.
+    """
     x = np.asarray(x, dtype=float)
     x = x[np.isfinite(x)]
     if x.size == 0:
@@ -72,7 +78,7 @@ def plot(x, *, centre: float, scale: float, lo: float, hi: float,
     grid = np.linspace(x_min, x_max, 512)
     pdf = np.exp(-0.5 * ((grid - centre) / scale) ** 2) / (scale * np.sqrt(2 * np.pi))
     ax.plot(grid, pdf, linestyle="--", linewidth=1.8, color="#d95f0e",
-            label=f"fitted normal  N({centre:.2f}, {scale:.2f}$^2$)")
+            label=f"{normal_label}  N({centre:.2f}, {scale:.2f}$^2$)")
 
     # The band.
     ax.axvline(lo, color="#b2182b", linewidth=1.5)
