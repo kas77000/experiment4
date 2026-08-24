@@ -83,8 +83,8 @@ def test_a_wider_later_period_flags_more_without_moving_the_band(tmp_path):
     later = _prep(synthetic_data.generate(n=2000, seed=8,
                                           start_date="2026-07-01",
                                           end_date="2026-07-31"))
-    # Blow out the metric so the later period is genuinely worse.
-    later[schema.SLIPPAGE_BPS] = later[schema.SLIPPAGE_BPS] * 3.0
+    # Blow out the BANDED metric so the later period is genuinely worse.
+    later[t5cfg.CONFIG.metric] = later[t5cfg.CONFIG.metric] * 3.0
 
     res = score.score_frame(later, t5cfg.CONFIG,
                             bands_dir=str(tmp_path / "bands"),

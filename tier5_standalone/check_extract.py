@@ -282,6 +282,35 @@ def main():
     if missing_opt:
         print(f"  Absent (features degrade, nothing breaks): {', '.join(missing_opt)}")
 
+    # ---- 1b. the banded metric ----
+    # The band is fitted on a column the extract supplies already divided by
+    # spread, and which column that is depends on the strategy's benchmark.
+    # Getting it wrong is invisible downstream -- the band still fits -- so the
+    # resolution is printed here, before anything is fitted.
+    section("1b. BANDED METRIC  ---  which column feeds each strategy's band")
+    src = config.metric_sources(raw)
+    if len(src):
+        print(src.to_string(index=False))
+        gaps = src[(~src["present"]) | (src["n_missing"] > 0)]
+        if len(gaps):
+            print("\n  STOP: these strategies have rows that cannot be banded:")
+            for _, r in gaps.iterrows():
+                print(f"    {r['strategy']}: {int(r['n_missing']):,} of "
+                      f"{int(r['n_rows']):,} rows have no {r['column']!r} value"
+                      + ("  (column absent from the extract)"
+                         if not r["present"] else ""))
+            print("  Add the column to the export, or point this strategy at a")
+            print("  different one in config.METRIC_BY_STRATEGY.")
+        fell_back = src[src["fallback"]]
+        if len(fell_back):
+            print(f"\n  Not in METRIC_BY_STRATEGY, so using the fallback "
+                  f"{config.METRIC_COLUMN_DEFAULT!r}: "
+                  f"{', '.join(fell_back['strategy'])}")
+            print("  If any of those is benchmarked against arrival rather than")
+            print("  interval VWAP, its band would be on the wrong benchmark.")
+    else:
+        print("  No Strategy column found; nothing to resolve.")
+
     # Named frame, no unit scaling and no sign flip yet -- the checks below need
     # the raw column exactly as it arrived.
     named = pipeline.load_orders(raw, config.COLUMN_MAP,

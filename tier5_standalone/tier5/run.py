@@ -1,6 +1,6 @@
 """Tier 5 driver:  python -m tier5.run  [--csv x.csv]
 
-    --metric        slippage_bps (default) | perf_in_spreads | perf_norm
+    --metric        perf_in_spreads (default, in spreads) | slippage_bps | perf_norm
     --k             scales either side of the centre (default 3.0)
     --estimator     classical (default) | robust
     --score-level   ALL (default) | algo | adv_bucket | algo_x_adv_bucket

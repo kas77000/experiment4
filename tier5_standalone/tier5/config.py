@@ -33,6 +33,19 @@ LEVEL_KEYS = {
 # robust    -> median / 1.4826 * MAD       (the same band, tail-resistant)
 ESTIMATORS = ("classical", "robust")
 
+# What a band bound MEANS, per metric. Printed next to every lo/hi and stamped
+# into the band file, because "-2.31 .. 1.87" is unreadable without it and
+# quietly wrong if a reader assumes bps.
+UNITS = {
+    schema.SLIPPAGE_BPS: "bps",
+    schema.PERF_IN_SPREADS: "spreads",
+    schema.PERF_NORM: "sigma",
+}
+
+
+def units_of(metric: str) -> str:
+    return UNITS.get(metric, "")
+
 
 @dataclass(frozen=True)
 class Tier5Config:
@@ -42,12 +55,19 @@ class Tier5Config:
     k_sigma: float = 3.0
 
     # --- which metric to band --------------------------------------------
-    #   SLIPPAGE_BPS    -> raw pVWAP slippage, in bps       (the headline)
-    #   PERF_IN_SPREADS -> slippage / spread
+    #   PERF_IN_SPREADS -> slippage / spread          (the default)
+    #   SLIPPAGE_BPS    -> raw slippage, in bps
     #   PERF_NORM       -> slippage / sigma_expected
-    # Raw bps is the default because "the range of performance" means a bps
-    # figure to the people who asked for it.
-    metric: str = schema.SLIPPAGE_BPS
+    #
+    # Spread-normalised is the default, so lo/hi come out in SPREADS. A 12 bps
+    # miss is noise in a wide Indian small cap and a serious miss in a tight
+    # Japanese large cap; dividing by the spread puts every name and every
+    # region on one scale before the band is fitted, which is what makes a
+    # single number defensible across four markets.
+    #
+    # The extract supplies this column already divided -- see
+    # config.METRIC_BY_STRATEGY for which source column each strategy uses.
+    metric: str = schema.PERF_IN_SPREADS
 
     # Which estimator SCORES orders. Both are always computed and reported;
     # this only picks the one the zones are cut on.

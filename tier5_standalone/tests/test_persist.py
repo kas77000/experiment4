@@ -4,20 +4,20 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tca import schema
+from tca import pipeline, schema
 from tier5 import band, config as t5cfg, persist
 
 
 def _fixture(tmp_path, n=2000, seed=5):
     rng = np.random.default_rng(seed)
-    df = pd.DataFrame({
+    df = pipeline.add_metric(pd.DataFrame({
         schema.SLIPPAGE_BPS: rng.normal(-10.0, 20.0, n),
         schema.SPREAD_BPS: rng.uniform(5.0, 15.0, n),
         schema.PCT_ADV: rng.uniform(0.1, 5.0, n),
         schema.VOLATILITY: rng.uniform(100.0, 250.0, n),
         schema.DURATION_MIN: rng.uniform(10.0, 300.0, n),
         schema.ORDER_DATE: pd.bdate_range("2025-06-02", periods=n).astype(str),
-    })
+    }))
     cfg = t5cfg.CONFIG
     est = band.estimates(df[cfg.metric].to_numpy(), cfg.k_sigma)
     path = str(tmp_path / "HK" / "VWAP.json")

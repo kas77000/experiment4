@@ -29,6 +29,7 @@ class CleanReport:
     dropped_dust: int
     dropped_data_error: int
     rows_out: int
+    dropped_no_metric: int = 0     # supplied metric column present but null
     norm_full_pct: float = 0.0     # % of rows using spread+vol normalization
 
     def as_text(self) -> str:
@@ -38,6 +39,7 @@ class CleanReport:
             f"  - bad/zero spread:       {self.dropped_bad_spread:,}\n"
             f"  - dust (< min_notional): {self.dropped_dust:,}\n"
             f"  - |perf| data error:     {self.dropped_data_error:,}\n"
+            f"  - no metric value:       {self.dropped_no_metric:,}\n"
             f"  rows out:                {self.rows_out:,}\n"
             f"  vol-normalized:          {self.norm_full_pct:.1f}%"
             f"  (rest fall back to spread-only)"
@@ -113,13 +115,12 @@ def normalize_units(df: pd.DataFrame, cfg) -> pd.DataFrame:
     return df
 
 
-def _apply_sign(df: pd.DataFrame, sign_convention: str) -> pd.Series:
-    """Return signed slippage where HIGHER = BETTER, regardless of source convention."""
-    s = df[schema.SLIPPAGE_BPS]
+def _sign_factor(sign_convention: str) -> float:
+    """+1 if higher is already better, -1 if the extract reports a cost."""
     if sign_convention == "positive_is_good":
-        return s
+        return 1.0
     if sign_convention == "cost":
-        return -s
+        return -1.0
     raise ValueError(f"Unknown SLIPPAGE_SIGN: {sign_convention!r}")
 
 
@@ -132,7 +133,16 @@ def clean(df: pd.DataFrame, cfg, sign_convention: str) -> tuple[pd.DataFrame, Cl
     n0 = len(df)
 
     df = df.copy()
-    df[schema.SLIPPAGE_BPS] = _apply_sign(df, sign_convention)
+    sign = _sign_factor(sign_convention)
+    df[schema.SLIPPAGE_BPS] = df[schema.SLIPPAGE_BPS] * sign
+    # A supplied spread-normalised metric comes out of the same system as the
+    # raw slippage, so one sign convention governs both. Flipping only one of
+    # them would leave the band and the diagnostic columns disagreeing about
+    # which tail is the bad one.
+    supplied_metric = schema.PERF_IN_SPREADS in df.columns
+    if supplied_metric:
+        df[schema.PERF_IN_SPREADS] = (
+            pd.to_numeric(df[schema.PERF_IN_SPREADS], errors="coerce") * sign)
 
     # 1) missing essentials
     before = len(df)
@@ -151,11 +161,24 @@ def clean(df: pd.DataFrame, cfg, sign_convention: str) -> tuple[pd.DataFrame, Cl
         df = df[df[schema.NOTIONAL].fillna(np.inf) >= cfg.min_notional]
         dropped_dust = before - len(df)
 
-    # 4) implausible normalized performance -> data error
-    perf = df[schema.SLIPPAGE_BPS] / df[schema.SPREAD_BPS]
+    # 4) implausible normalized performance -> data error. Measured on the
+    #    metric that will actually be banded, so the guard and the band are
+    #    never pointed at two different quantities.
+    perf = (df[schema.PERF_IN_SPREADS] if supplied_metric
+            else df[schema.SLIPPAGE_BPS] / df[schema.SPREAD_BPS])
     before = len(df)
-    df = df[perf.abs() <= cfg.max_abs_perf_spreads]
+    df = df[perf.abs().fillna(0.0) <= cfg.max_abs_perf_spreads]
     dropped_data_error = before - len(df)
+
+    # 5) a supplied metric that is null -- the strategy's source column was
+    #    absent from the export, or blank on these rows. Such an order cannot
+    #    be banded or scored, and dropping it without a count is exactly the
+    #    silent shrinkage this report exists to prevent.
+    dropped_no_metric = 0
+    if supplied_metric:
+        before = len(df)
+        df = df[df[schema.PERF_IN_SPREADS].notna()]
+        dropped_no_metric = before - len(df)
 
     report = CleanReport(
         rows_in=n0,
@@ -163,15 +186,25 @@ def clean(df: pd.DataFrame, cfg, sign_convention: str) -> tuple[pd.DataFrame, Cl
         dropped_bad_spread=dropped_bad_spread,
         dropped_dust=dropped_dust,
         dropped_data_error=dropped_data_error,
+        dropped_no_metric=dropped_no_metric,
         rows_out=len(df),
     )
     return df.reset_index(drop=True), report
 
 
 def add_metric(df: pd.DataFrame) -> pd.DataFrame:
-    """Tier 1/2 metric: performance expressed in units of spread."""
+    """Tier 1/2 metric: performance expressed in units of spread.
+
+    If the extract already supplies it -- COLUMN_MAP points PERF_IN_SPREADS at a
+    column such as `ePvwap/Sprd`, which is pre-divided at source -- that column
+    is kept exactly as it arrived. Dividing an already-normalised number by the
+    spread a second time is the one mistake here that produces output which
+    looks entirely plausible: the band still fits, the curve still looks like a
+    curve, and every bound is wrong by a factor of the spread.
+    """
     df = df.copy()
-    df[schema.PERF_IN_SPREADS] = df[schema.SLIPPAGE_BPS] / df[schema.SPREAD_BPS]
+    if schema.PERF_IN_SPREADS not in df.columns:
+        df[schema.PERF_IN_SPREADS] = df[schema.SLIPPAGE_BPS] / df[schema.SPREAD_BPS]
     return df
 
 
