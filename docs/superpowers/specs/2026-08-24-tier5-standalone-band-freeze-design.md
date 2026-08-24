@@ -56,33 +56,39 @@ for three things and nothing else:
 2. **Stamping the fit window into the band file**, so a band is self-describing.
 3. **Refusing to score a file that overlaps the fit window**, which is leakage.
 
-It is **optional**. If the column is absent or unmapped, the period falls back
-to `--label` (default `score`) and the overlap check is skipped with a printed
-notice. The metric, the band and the scoring path never touch it, so a missing
-date degrades labelling and nothing else.
-
-The source column name is extract-specific. `config.py` ships with a documented
-candidate list (`starttime`, `StartTime`, `TradeDate`, `Date`) and
-`check_extract.py` prints which of them it found, so the user sets it once.
-
-## Region aliasing
-
-Bloomberg uses two suffixes for India: `IN` (NSE) and `IS` (BSE). Left alone,
-that silently splits India into two half-sized cells, each with a different band
-and neither matching what the user asked for. `config.py` gains:
+The source column is **`Date`**, confirmed by the user as stable across every
+extract they will use. `config.py` maps it directly:
 
 ```python
-REGION_ALIASES = {"IS": "IN"}     # fold BSE into India
-REGION_NAMES = {"AU": "Australia", "HK": "Hong Kong",
-                "JT": "Japan", "IN": "India"}
+COLUMN_MAP[schema.ORDER_DATE] = "Date"
 ```
 
-`REGION_ALIASES` is applied to `schema.MARKET` during preparation.
-`REGION_NAMES` is presentation only -- folders use the two-letter code.
+It is still treated as **optional** in code. `synthetic_data.generate()` emits
+no date column, so the demo and self-test paths must tolerate its absence: the
+period falls back to `--label` (default `score`) and the overlap check is
+skipped with a printed notice. The metric, the band and the scoring path never
+touch it, so a missing date degrades labelling and nothing else.
 
-Any suffix not in `REGION_NAMES` still fits normally; it is reported in the
-summary as an unrecognised region rather than dropped, so a stray venue shows up
-instead of vanishing.
+`synthetic_data.generate()` gains a `Date` column spread across a synthetic
+year, so the demo exercises period labelling and the overlap check rather than
+only the fallback.
+
+## Regions
+
+Region is the two-character `Sym` suffix, already derived by
+`config.PRE_TRANSFORM` into `schema.MARKET`. The four in use:
+
+```python
+REGION_NAMES = {"AU": "Australia", "HK": "Hong Kong",
+                "JP": "Japan", "IN": "India"}
+```
+
+Presentation only -- folders use the two-letter code. Japan is always `JP` and
+India always `IN` in these extracts, so no suffix aliasing is done for either.
+
+Any suffix not in `REGION_NAMES` still fits normally and is reported in the
+summary as an unrecognised region rather than dropped. That is the safety net if
+a venue ever arrives under an unexpected code.
 
 ## Folder layout
 
@@ -336,8 +342,11 @@ Ends with a cross-cell summary written to `outputs/score/<period>/_summary.csv`
 - A band file with a bumped `format_version` raises on load.
 - A multi-region, multi-strategy synthetic file produces one band per cell, in
   the right folders.
-- India rows suffixed `IN` and `IS` land in a single `IN` cell.
+- A `Sym` suffix outside `REGION_NAMES` is fitted and reported, not dropped.
 - An extract with no date column still fits and scores, labelled from `--label`.
+- The synthetic demo, which now carries a `Date` column, produces a period label
+  derived from the data and trips the overlap check when fit and score files
+  share rows.
 - Overlapping fit and score windows are refused.
 - A cell with no band file is skipped with a message, not scored.
 - `score` on a file whose metric column is absent fails with a clear message.
