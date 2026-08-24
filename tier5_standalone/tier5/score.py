@@ -1,0 +1,191 @@
+"""Apply frozen bands to a later period.
+
+    python -m tier5.score --csv extracts/july.csv --label 2026-07
+
+This module NEVER fits. It reads lo/hi out of a band file and classifies
+against them unchanged, which is what turns the flag rate from a definition
+into a measurement. If a cell has no band file it is skipped and reported --
+scoring HK VWAP orders against the Japan TWAP band would produce
+plausible-looking numbers with no warning, which is worse than no answer.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+
+import numpy as np
+import pandas as pd
+
+from tca import dataset, report, schema
+from tier5 import band, cells, config as t5cfg, curve, persist
+
+
+class LeakageError(RuntimeError):
+    """The scoring window overlaps the window the band was fitted on."""
+
+
+# Written to outliers.csv when present in the extract. These are the inputs to
+# the analyst's explanation -- this module deliberately does not attribute
+# cause. Automated attribution is a cost-model job and would defeat the point
+# of a standalone folder.
+DIAGNOSTIC_COLS = [schema.NOTIONAL, schema.SPREAD_BPS, schema.PCT_ADV,
+                   schema.PARTICIPATION, schema.DURATION_MIN,
+                   schema.PASSIVE_FILL_PCT, schema.AUCTION_PCT,
+                   schema.REVERSION_BPS, schema.MOMENTUM_BPS]
+
+IDENT_COLS = [schema.ORDER_ID, schema.SYMBOL, schema.SIDE, schema.ORDER_DATE]
+
+
+def n_sigma_outside(x, lo: float, hi: float, scale: float):
+    """How far outside the band, in scales. Always >= 0; exactly 0 inside.
+
+    Positive on both sides so a single column ranks the queue regardless of
+    which tail an order broke, and comparable across cells because every cell
+    is divided by its own scale.
+    """
+    x = np.asarray(x, dtype=float)
+    return np.maximum(0.0, np.maximum((x - hi) / scale, (lo - x) / scale))
+
+
+def score_frame(df, base_cfg, *, bands_dir: str, out_dir: str,
+                label: str | None = None) -> list[dict]:
+    """Score every cell in `df` against its frozen band."""
+    results = []
+    for region, strategy, g in cells.cells(df):
+        period = label or cells.period_label(g) or "score"
+        path = cells.band_path(bands_dir, region, strategy)
+        row = {"region": region, "strategy": strategy, "n": int(len(g)),
+               "period": period, "n_flagged": 0,
+               "flag_rate_pct": float("nan"), "fit_flag_rate_pct": float("nan"),
+               "lo": float("nan"), "hi": float("nan"),
+               "skipped": False, "reason": "", "out_dir": None,
+               "drift_table": None, "drift_warnings": [], "curve_msg": ""}
+
+        if not os.path.exists(path):
+            row["skipped"] = True
+            row["reason"] = (f"no band at {path} -- fit this cell first. "
+                             f"Not scored against another cell's band.")
+            results.append(row)
+            continue
+
+        frozen, cfg, reference = persist.load(path, base_cfg)
+
+        b_lo, b_hi = cells.date_range(g)
+        f_lo = pd.Timestamp(frozen["fit_date_min"]) if frozen["fit_date_min"] else None
+        f_hi = pd.Timestamp(frozen["fit_date_max"]) if frozen["fit_date_max"] else None
+        if cells.windows_overlap(f_lo, f_hi, b_lo, b_hi):
+            raise LeakageError(
+                f"{region}/{strategy}: the scoring window "
+                f"{b_lo.date()}..{b_hi.date()} overlaps the window the band was "
+                f"fitted on ({f_lo.date()}..{f_hi.date()}). Scoring a period the "
+                f"band already saw makes the flag rate circular, which is the "
+                f"one thing this workflow exists to avoid.")
+
+        if cfg.metric not in g.columns:
+            row["skipped"] = True
+            row["reason"] = f"extract has no column {cfg.metric!r}"
+            results.append(row)
+            continue
+
+        lo, hi = float(frozen["lo"]), float(frozen["hi"])
+        centre, scale = float(frozen["centre"]), float(frozen["scale"])
+        x = pd.to_numeric(g[cfg.metric], errors="coerce").to_numpy(dtype=float)
+
+        scored = g.copy()
+        scored["zone"] = [band.classify(v, lo, hi) for v in x]
+        scored["band_lo"] = lo
+        scored["band_hi"] = hi
+        scored["band_centre"] = centre
+        scored["band_scale"] = scale
+        scored["n_sigma_outside"] = n_sigma_outside(x, lo, hi, scale)
+        scored["flagged"] = scored["zone"].isin(list(band.FLAGGED))
+
+        row["lo"], row["hi"] = lo, hi
+        row["n_flagged"] = int(scored["flagged"].sum())
+        row["flag_rate_pct"] = 100.0 * float(scored["flagged"].mean())
+        row["fit_flag_rate_pct"] = reference.get("flag_rate_pct", float("nan"))
+
+        cell_out = cells.out_dir(out_dir, "score", period, region, strategy)
+        os.makedirs(cell_out, exist_ok=True)
+        row["out_dir"] = cell_out
+
+        keep = [c for c in (IDENT_COLS
+                            + ["zone", cfg.metric, schema.SLIPPAGE_BPS,
+                               "band_lo", "band_hi", "n_sigma_outside"]
+                            + DIAGNOSTIC_COLS) if c in scored.columns]
+        keep = list(dict.fromkeys(keep))
+
+        scored.to_csv(os.path.join(cell_out, "scored.csv"), index=False)
+        (scored[scored["flagged"]][keep]
+         .sort_values("n_sigma_outside", ascending=False)
+         .to_csv(os.path.join(cell_out, "outliers.csv"), index=False))
+
+        table, warnings = persist.drift_report(g, scored, reference, cfg)
+        row["drift_table"], row["drift_warnings"] = table, warnings
+
+        row["curve_msg"] = curve.plot(
+            x, centre=centre, scale=scale, lo=lo, hi=hi,
+            path=os.path.join(cell_out, "curve.png"),
+            title=f"{region} / {strategy}  --  {period} vs frozen band",
+            subtitle=f"band frozen on {frozen.get('fit_period')}",
+            k=float(frozen["k_sigma"]))
+
+        results.append(row)
+    return results
+
+
+def main():
+    ap = dataset.add_common_args(argparse.ArgumentParser())
+    ap.add_argument("--bands-dir", default="bands",
+                    help="Where to look up frozen bands.")
+    ap.add_argument("--out-dir", default="outputs")
+    ap.add_argument("--label", default=None,
+                    help="Name the period folder. Defaults to the Date range.")
+    args = ap.parse_args()
+
+    df, clean_report = dataset.load_prepared(args)
+
+    print(report.header("TIER 5 --- SCORE AGAINST FROZEN BANDS"))
+    print("\n=== Cleaning ===")
+    print(clean_report.as_text())
+
+    try:
+        results = score_frame(df, t5cfg.CONFIG, bands_dir=args.bands_dir,
+                              out_dir=args.out_dir, label=args.label)
+    except LeakageError as exc:
+        # A traceback here would read as a crash. It is a refusal, and the
+        # reason matters more than the stack.
+        print("\n=== REFUSED: the scoring window overlaps the fit window ===")
+        print(f"\n  {exc}")
+        print("\n  Export a period the band has not already seen, or refit the "
+              "band on\n  an earlier window.")
+        raise SystemExit(2)
+
+    for r in results:
+        print(f"\n  {r['region']} / {r['strategy']}")
+        if r["skipped"]:
+            print(f"    SKIPPED: {r['reason']}")
+            continue
+        ratio = (r["flag_rate_pct"] / r["fit_flag_rate_pct"]
+                 if r["fit_flag_rate_pct"] else float("nan"))
+        print(f"    band        {r['lo']:.2f} .. {r['hi']:.2f}   (frozen)")
+        print(f"    fit book:   {r['fit_flag_rate_pct']:.2f}% outside")
+        print(f"    {r['period']}:    {r['n']:,} orders, {r['n_flagged']} flagged, "
+              f"{r['flag_rate_pct']:.2f}% outside"
+              + (f"   <- {ratio:.1f}x" if np.isfinite(ratio) else ""))
+        print(f"    wrote {r['out_dir']}")
+        if r["drift_warnings"]:
+            print("\n    Drift:")
+            for w in r["drift_warnings"]:
+                print(f"      - {w}")
+
+    n_ok = sum(1 for r in results if not r["skipped"])
+    print(f"\nScored {n_ok} cell(s). {len(results) - n_ok} skipped.")
+    if n_ok:
+        print("  Open outliers.csv in each cell folder: one row per order outside")
+        print("  the band, worst first, with the diagnostic columns to explain it.")
+
+
+if __name__ == "__main__":
+    main()
