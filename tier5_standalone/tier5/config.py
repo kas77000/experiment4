@@ -54,6 +54,27 @@ class Tier5Config:
     # IF the data is normal, which is the assumption the report tests.
     k_sigma: float = 3.0
 
+    # --- or: pick the review load and let the data supply k ---------------
+    # A percentage. When set, k_sigma is IGNORED and each cell solves for the
+    # k that puts exactly this share of its fit book outside the band.
+    #
+    # Why this exists: k = 3 promises 0.27% only under normality, and no
+    # execution book is normal. A real one is sharply peaked in the middle and
+    # heavy in the tails, so k = 3 routinely flags five to ten times what it
+    # advertises. There are two honest responses to that and only two --
+    # keep k = 3 and accept the real rate, or state the rate you want and
+    # report the k it took. This is the second. What is NOT honest is calling
+    # a band "3 sigma" while the tails mean something entirely different.
+    #
+    # The number is a resourcing decision, not a statistical one: 0.5% of a
+    # 47k book is about 20 orders a month to explain. Say what the desk can
+    # actually review and set that.
+    #
+    # Note the fit-book rate then equals the target BY CONSTRUCTION, so it
+    # measures nothing. The out-of-sample number from tier5.score is still a
+    # measurement, and is the one that carries information.
+    target_flag_rate: float | None = None
+
     # --- which metric to band --------------------------------------------
     #   PERF_IN_SPREADS -> slippage / spread          (the default)
     #   SLIPPAGE_BPS    -> raw slippage, in bps

@@ -188,6 +188,7 @@ caption and still counted in every number.
 |---|---|---|
 | `--csv PATH` | — | The extract. Omit for a synthetic demo book. |
 | `--k` | `3.0` | Scales either side of the centre. |
+| `--target-flag-rate PCT` | off | Solve for `k` per cell so exactly `PCT`% of the fit book falls outside. Overrides `--k`. |
 | `--metric` | `perf_in_spreads` | Also `slippage_bps` (bps), `perf_norm` (sigma). |
 | `--estimator` | `classical` | `classical` = mean ± k·sd. `robust` = median ± k·1.4826·MAD. |
 | `--bands-dir` | `bands` | Where band JSON is written. |
@@ -202,6 +203,7 @@ caption and still counted in every number.
 | `--csv PATH` | — | The later period's extract. |
 | `--bands-dir` | `bands` | Where to look up frozen bands. |
 | `--label` | from `Date` | Names the period folder. |
+| `--min-notional-review AMOUNT` | frozen with the band | Only queue flagged orders at least this large. The band does not move; every flagged order still appears in `outliers.csv`, marked `review_required`. |
 | `--out-dir` | `outputs` | |
 
 **`tier5.batch`** takes `fit` or `score`, plus `--dir` and all of the above.
@@ -212,35 +214,94 @@ circular — use `fit` + `score` for a number you can defend.
 
 ---
 
-## Choosing `k`
+## Choosing `k` — or not choosing it at all
 
 `k = 3` is a promise: under a normal distribution 99.73% of orders fall inside,
-so you flag 0.27% — about 1 in 370. Real execution books don't keep that
-promise. They are leptokurtic: more concentrated in the middle *and* fatter in
-the tails than a normal, which is exactly the shape a two-parameter Gaussian
-cannot represent.
+so you flag 0.27% — about 1 in 370. **Real execution books do not keep that
+promise.** They are leptokurtic: sharply concentrated in the middle *and* far
+fatter in the tails than a normal — exactly the shape a two-parameter Gaussian
+cannot represent. Open any `curve.png` and the gap between the filled shape and
+the dashed line is that failure, drawn.
 
-Measured across five strategies on a synthetic book, every one of them flagged
-roughly **6× what `k = 3` promised**, and each needed `k ≈ 4.5–5.0` to actually
-deliver 0.27%.
+On a real HK VWAP book of 47k orders (`sd = 2.67`), `k = 3` put **2.42%**
+outside — nine times what it advertised, about 95 orders a month to explain.
 
-Every band file records what would have worked:
+There are exactly two honest responses, and the choice between them is a
+resourcing decision, not a statistical one.
+
+**Keep `k = 3` and accept the real rate.** The number is textbook and needs no
+defending. You just cannot also claim it flags 0.27%.
+
+**State the rate you want and report the `k` it took.** `--target-flag-rate`
+solves for `k` per cell:
+
+```bash
+python -m tier5.fit --csv year.csv --target-flag-rate 0.5
+```
+
+What that costs on a book shaped like the one above:
+
+| Target | `k` needed | Band | Per year | Per month |
+|---|---|---|---|---|
+| 2.42% (`k = 3`) | 3.00 | −8.26 .. 7.76 | 1,136 | 95 |
+| 1.00% | 3.61 | −9.88 .. 9.38 | 470 | 39 |
+| 0.50% | 4.03 | −11.02 .. 10.52 | 235 | 20 |
+| 0.27% | 4.39 | −11.96 .. 11.46 | 127 | 11 |
+
+Note how little the band has to widen. Because the tail is heavy, going from
+`k = 3` to `k ≈ 4` cuts the queue five-fold — the orders being dropped are the
+dense inner tail, not the genuinely extreme ones.
+
+What is **not** honest is calling a band "3 sigma" while its tails mean
+something entirely different from what that phrase implies.
+
+### The catch with per-cell `k`
+
+`--target-flag-rate` gives every cell the same share of the queue, which means a
+cell with fatter tails gets a wider band. Read that twice: **a region with
+genuinely worse execution is handed a more forgiving bound.** That is right if
+you are allocating scarce review capacity evenly, and wrong if you want one
+absolute standard across regions. If you want the latter, fit once with
+`--target-flag-rate`, read the solved `k` values, and then refit everything with
+a single `--k`. The band file records which you did:
+
+```json
+"k_sigma": 4.03, "k_source": "target_flag_rate", "target_flag_rate": 0.5
+```
+
+Every band file also records what `k` *would* have delivered 0.27%, whichever
+route you took:
 
 ```json
 "reference": { "k_required": 4.61, "k_required_lo": 4.67, "k_required_hi": 4.41 }
 ```
 
-Two defensible choices:
+### Do not reach for `--estimator robust` here
 
-- **Keep `k = 3`** and accept a queue nearer 1.5%. The number is textbook and
-  needs no defending.
-- **Set `k` from `k_required`** across your twelve cells. One `k` serves all of
-  them well, *provided* each cell gets its own centre and scale — which this
-  tool does by construction.
+It moves the band the wrong way. On a book with a sharp central spike the MAD is
+*small*, so `median ± k·1.4826·MAD` is **narrower** than the classical band and
+flags **more**, not fewer. Robust estimators resist outliers dragging the scale
+out; they do not widen a band. It remains the right choice when a handful of
+data errors are inflating `sd`, which is a different problem.
 
-Don't tune `k` per cell. The spread in required `k` between strategies is small;
-the spread in required *centre and scale* is large. The per-cell bands already
-handle that.
+### The second lever: materiality
+
+Widening the band is not the only way to shrink the queue. Being outside the
+band and being worth an analyst's hour are different questions — a 3-spread miss
+on a $40k order costs almost nothing to fix.
+
+```bash
+python -m tier5.score --csv july.csv --min-notional-review 5000000
+```
+
+On the same book: 95 flagged a month at `k = 3`; 20 with the band calibrated to
+0.5%; **7** once a $5m materiality gate is applied. Nothing is hidden — every
+flagged order stays in `outliers.csv` with a `review_required` column, so the
+record is complete and the queue is short.
+
+The gate is frozen with the band so a rescore reproduces the same queue, but the
+flag above overrides it without refitting: the band is a measurement and must not
+move, while how much of the queue you work is a policy that can change.
 
 ---
 
