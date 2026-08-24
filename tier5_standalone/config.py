@@ -26,6 +26,7 @@ min_group_n -- live in `tier5/config.py`.
 
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 
 from tca import schema
@@ -134,7 +135,136 @@ def PRE_TRANSFORM(df: pd.DataFrame) -> pd.DataFrame:
             rev = -rev
         df["_reversion"] = rev
 
+    # --- the banded metric, already divided by spread ----------------------
+    perf = _metric_in_spreads(df)
+    if perf is not None:
+        df["_perf_spreads"] = perf
+
     return df
+
+
+# ---------------------------------------------------------------------------
+# 1b) THE BANDED METRIC  ---  which column, per strategy
+# ---------------------------------------------------------------------------
+# The extract supplies performance ALREADY normalised by the spread, so the
+# band's bounds come out in spreads rather than bps. That is deliberate: a
+# 12 bps miss is a rounding error in a wide Indian small cap and a disaster in
+# a tight Japanese large cap, and dividing by the spread puts every region and
+# every name on one scale before the band is fitted.
+#
+# Strategies are benchmarked differently, so each names its own column:
+#
+#   VWAP family   ePvwap/Sprd   slippage vs INTERVAL VWAP, in spreads
+#   PART / POV    eIS/Sprd      slippage vs ARRIVAL price, in spreads
+#
+# Those two are not interchangeable and must never share a band -- arrival
+# slippage carries the market's drift over the order's life, interval VWAP does
+# not. They stay separate because the band is fitted per (region, strategy),
+# and this map is what makes each cell read its own benchmark.
+#
+# Keys are matched case-insensitively against the `Strategy` column. A strategy
+# that is not listed falls back to METRIC_COLUMN_DEFAULT and is REPORTED as a
+# fallback by every entry point -- a silent fallback would band the wrong
+# benchmark and look entirely normal doing it.
+METRIC_BY_STRATEGY = {
+    "VWAP": "ePvwap/Sprd",
+    "PART": "eIS/Sprd",
+    "POV":  "eIS/Sprd",
+}
+
+METRIC_COLUMN_DEFAULT = "ePvwap/Sprd"
+
+
+def metric_column_for(strategy: str) -> tuple[str, bool]:
+    """(source column, whether it came from the fallback) for one strategy."""
+    key = str(strategy).strip().upper()
+    if key in METRIC_BY_STRATEGY:
+        return METRIC_BY_STRATEGY[key], False
+    return METRIC_COLUMN_DEFAULT, True
+
+
+def _metric_in_spreads(df: pd.DataFrame):
+    """Coalesce each row's spread-normalised metric into one column.
+
+    Returns None when the extract has none of the source columns -- the
+    synthetic demo uses canonical names and derives the metric in the pipeline
+    instead, and must not be handed an all-NaN column here.
+    """
+    known = set(METRIC_BY_STRATEGY.values()) | {METRIC_COLUMN_DEFAULT}
+    if not (known & set(df.columns)):
+        return None
+
+    out = pd.Series(np.nan, index=df.index, dtype=float)
+    if "Strategy" not in df.columns:
+        if METRIC_COLUMN_DEFAULT in df.columns:
+            out[:] = pd.to_numeric(df[METRIC_COLUMN_DEFAULT], errors="coerce")
+        return out
+
+    strat = df["Strategy"].astype(str).str.strip().str.upper()
+    for name in strat.dropna().unique():
+        col, _ = metric_column_for(name)
+        if col in df.columns:
+            m = strat == name
+            out.loc[m] = pd.to_numeric(df.loc[m, col], errors="coerce")
+    return out
+
+
+def metric_source_lines(strategies) -> list[str]:
+    """Printable lines naming the source column behind each strategy's band.
+
+    Takes strategy names rather than a frame, so it works after the pipeline
+    has renamed the vendor columns away -- which is where fit and batch are by
+    the time they know which cells exist.
+    """
+    seen = sorted({str(s).strip().upper() for s in strategies})
+    if not seen:
+        return []
+
+    lines, fallbacks = [], []
+    width = max(len(s) for s in seen)
+    for name in seen:
+        col, fallback = metric_column_for(name)
+        mark = "   <- fallback" if fallback else ""
+        lines.append(f"    {name:<{width}}  {col}{mark}")
+        if fallback:
+            fallbacks.append(name)
+
+    if fallbacks:
+        lines.append("")
+        lines.append(f"    {', '.join(fallbacks)} is not in METRIC_BY_STRATEGY, so it used the")
+        lines.append(f"    fallback column {METRIC_COLUMN_DEFAULT!r}. If that strategy is")
+        lines.append(f"    benchmarked against arrival rather than interval VWAP, its band")
+        lines.append(f"    is on the wrong benchmark -- add it to config.METRIC_BY_STRATEGY.")
+    return lines
+
+
+def metric_sources(df: pd.DataFrame) -> pd.DataFrame:
+    """One row per strategy: which column feeds its band, and how complete it is.
+
+    Printed by check_extract, fit and batch. The point is that choosing the
+    wrong source column is invisible in the output -- the band still fits, the
+    curve still looks like a curve -- so the choice is stated out loud instead.
+    """
+    perf = _metric_in_spreads(df)
+    if "Strategy" in df.columns:
+        strat = df["Strategy"].astype(str).str.strip().str.upper()
+    else:
+        strat = pd.Series(["(no Strategy column)"] * len(df), index=df.index)
+
+    rows = []
+    for name in sorted(strat.dropna().unique()):
+        col, fallback = metric_column_for(name)
+        m = strat == name
+        vals = perf[m] if perf is not None else pd.Series(dtype=float)
+        rows.append({
+            "strategy": name,
+            "column": col,
+            "present": col in df.columns,
+            "fallback": fallback,
+            "n_rows": int(m.sum()),
+            "n_missing": int(m.sum() - vals.notna().sum()),
+        })
+    return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +280,13 @@ COLUMN_MAP = {
     schema.SYMBOL:        "_symbol",       # <- derived from Sym
     schema.SLIPPAGE_BPS:  "Pvwap",
     schema.SPREAD_BPS:    "Sprd",
+
+    # THE BANDED METRIC. Built by PRE_TRANSFORM from ePvwap/Sprd or eIS/Sprd
+    # depending on the strategy -- see METRIC_BY_STRATEGY above. Because it is
+    # mapped, the pipeline uses it as supplied instead of deriving it, so the
+    # already-divided number is never divided by the spread a second time.
+    schema.PERF_IN_SPREADS: "_perf_spreads",
+
     schema.PCT_ADV:       "%Adv",
     schema.VOLATILITY:    "Vol",
     schema.PARTICIPATION: "PR",

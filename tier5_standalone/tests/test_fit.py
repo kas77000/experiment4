@@ -4,7 +4,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from tca import schema
+from tca import pipeline, schema
 from tier5 import cells, config as t5cfg, fit
 
 
@@ -14,7 +14,7 @@ def _book(n_per_cell=600, seed=4):
     for region, strategy, mu, sd in [("HK", "VWAP", -10.0, 20.0),
                                      ("HK", "TWAP", -14.0, 24.0),
                                      ("JP", "VWAP", -8.0, 18.0)]:
-        frames.append(pd.DataFrame({
+        frames.append(pipeline.add_metric(pd.DataFrame({
             schema.MARKET: region,
             schema.ALGO: strategy,
             schema.SLIPPAGE_BPS: rng.normal(mu, sd, n_per_cell),
@@ -24,19 +24,19 @@ def _book(n_per_cell=600, seed=4):
             schema.DURATION_MIN: rng.uniform(10.0, 300.0, n_per_cell),
             schema.ORDER_DATE: pd.bdate_range("2025-06-02",
                                               periods=n_per_cell).astype(str),
-        }))
+        })))
     return pd.concat(frames, ignore_index=True)
 
 
 def _thin(n=40, seed=9):
     rng = np.random.default_rng(seed)
-    return pd.DataFrame({
+    return pipeline.add_metric(pd.DataFrame({
         schema.MARKET: "AU", schema.ALGO: "IS",
         schema.SLIPPAGE_BPS: rng.normal(-9.0, 19.0, n),
         schema.SPREAD_BPS: 10.0, schema.PCT_ADV: 1.0,
         schema.VOLATILITY: 180.0, schema.DURATION_MIN: 60.0,
         schema.ORDER_DATE: "2025-07-01",
-    })
+    }))
 
 
 def test_writes_one_band_per_cell(tmp_path):
@@ -105,8 +105,9 @@ def test_curve_written_per_cell(tmp_path):
 
 
 def test_missing_metric_column_raises(tmp_path):
-    book = _book().drop(columns=[schema.SLIPPAGE_BPS])
+    """Whatever metric is configured, its absence must stop the run."""
+    book = _book().drop(columns=[t5cfg.CONFIG.metric])
     import pytest
-    with pytest.raises(ValueError, match="slippage_bps"):
+    with pytest.raises(ValueError, match=t5cfg.CONFIG.metric):
         fit.fit_frame(book, t5cfg.CONFIG, bands_dir=str(tmp_path / "bands"),
                       out_dir=str(tmp_path / "outputs"), source_csv="y.csv")

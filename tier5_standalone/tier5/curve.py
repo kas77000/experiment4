@@ -36,9 +36,27 @@ def view_range(x, lo: float, hi: float, scale: float) -> tuple[float, float]:
             max(hi + 0.5 * scale, float(np.percentile(x, 99.8))))
 
 
+def caption(*, n: int, k: float, outside: float, n_offscreen: int,
+            units: str) -> str:
+    """The line under the x-axis: what the axis is in, and what it summarises.
+
+    The units matter more than they look. A band drawn at -5.59 is five and a
+    half SPREADS wide, not five and a half bps, and a reader who assumes bps
+    reads the picture as a rounding error.
+    """
+    axis = f"metric in {units}" if units else "metric"
+    text = (f"{axis}    n = {n:,}    k = {k:g}    "
+            f"outside the band: {100 * outside:.2f}%")
+    if n_offscreen:
+        text += (f"    ({n_offscreen} order(s) beyond this view, still "
+                 f"counted above)")
+    return text
+
+
 def plot(x, *, centre: float, scale: float, lo: float, hi: float,
          path: str, title: str, subtitle: str | None = None,
-         k: float = 3.0, normal_label: str = "fitted normal") -> str:
+         k: float = 3.0, normal_label: str = "fitted normal",
+         units: str = "") -> str:
     """Write the curve. Returns the line to print (never raises on a missing lib).
 
     `normal_label` names the dashed curve. It matters: at fit time the normal IS
@@ -100,14 +118,11 @@ def plot(x, *, centre: float, scale: float, lo: float, hi: float,
     ax.set_xlim(x_min, x_max)
 
     ax.set_title(title, fontsize=13)
-    caption = (f"n = {x.size:,}    k = {k:g}    "
-               f"outside the band: {100 * outside:.2f}%")
-    if n_offscreen:
-        caption += (f"    ({n_offscreen} order(s) beyond this view, still "
-                    f"counted above)")
+    text = caption(n=int(x.size), k=k, outside=outside,
+                   n_offscreen=n_offscreen, units=units)
     if subtitle:
-        caption = f"{subtitle}\n{caption}"
-    ax.set_xlabel(caption)
+        text = f"{subtitle}\n{text}"
+    ax.set_xlabel(text)
     ax.set_ylabel("density")
     ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
     fig.tight_layout()

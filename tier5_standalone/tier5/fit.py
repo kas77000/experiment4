@@ -44,6 +44,17 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
                "band_path": None, "skipped": False, "reason": "",
                "curve_msg": ""}
 
+        if est["n"] == 0:
+            # Distinct from "too few orders": the cell has rows, they just
+            # carry no metric. Almost always the strategy's source column was
+            # left out of the export -- see config.METRIC_BY_STRATEGY.
+            row["skipped"] = True
+            row["reason"] = (f"{len(g):,} orders but no usable {cfg.metric!r} "
+                             f"value in any of them -- check that this "
+                             f"strategy's source column is in the extract.")
+            results.append(row)
+            continue
+
         if est["n"] < cfg.min_group_n and not force:
             row["skipped"] = True
             row["reason"] = (f"n={est['n']} is below min_group_n="
@@ -71,7 +82,8 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
             x, centre=row["centre"], scale=row["scale"], lo=lo, hi=hi,
             path=os.path.join(cell_out, "curve.png"),
             title=f"{region} / {strategy}  --  {cfg.metric}",
-            subtitle=f"fitted on {period}", k=cfg.k_sigma)
+            subtitle=f"fitted on {period}", k=cfg.k_sigma,
+            units=t5cfg.units_of(cfg.metric))
 
         results.append(row)
     return results
@@ -110,13 +122,22 @@ def main():
     print(report.header("TIER 5 --- FIT AND FREEZE"))
     print("\n=== Cleaning ===")
     print(clean_report.as_text())
-    print(f"\n  metric={cfg.metric}  k={cfg.k_sigma:g}  estimator={cfg.estimator}"
-          f"  min_group_n={cfg.min_group_n}")
+    units = t5cfg.units_of(cfg.metric)
+    print(f"\n  metric={cfg.metric} ({units})  k={cfg.k_sigma:g}"
+          f"  estimator={cfg.estimator}  min_group_n={cfg.min_group_n}")
 
     results = fit_frame(df, cfg, bands_dir=args.bands_dir,
                         out_dir=args.out_dir,
                         source_csv=args.csv or "synthetic",
                         force=args.force)
+
+    # Which column each strategy's band was built from. Stated out loud because
+    # choosing the wrong one is invisible in the output: the band still fits and
+    # the curve still looks like a curve, it is just the wrong benchmark.
+    lines = config.metric_source_lines(r["strategy"] for r in results)
+    if lines:
+        print("\n=== Metric source ===")
+        print("\n".join(lines))
 
     for r in results:
         print(f"\n  {r['region']} / {r['strategy']}   n = {r['n']:,}   {r['period']}")
@@ -125,7 +146,7 @@ def main():
             continue
         print(f"    centre  {r['centre']:>9.2f}")
         print(f"    scale   {r['scale']:>9.2f}")
-        print(f"    RANGE   {r['lo']:>9.2f} .. {r['hi']:.2f}"
+        print(f"    RANGE   {r['lo']:>9.2f} .. {r['hi']:.2f} {units}"
               f"      <- frozen to {r['band_path']}")
         print(f"    in-sample flagged: {r['flag_rate_pct']:.2f}%")
         if r["curve_msg"]:

@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from tca import schema
-from tier5 import cells, normality
+from tier5 import cells, config as t5cfg, normality
 
 FORMAT_VERSION = 1
 
@@ -83,6 +83,10 @@ def save(est: dict, cfg, path: str, *, region: str, strategy: str,
         "fit_date_min": d_lo.strftime("%Y-%m-%d") if d_lo is not None else None,
         "fit_date_max": d_hi.strftime("%Y-%m-%d") if d_hi is not None else None,
         "metric": cfg.metric,
+        # What lo/hi are counted in. Stamped so the artefact is readable on its
+        # own six months from now, and so a band frozen in bps is recognisable
+        # next to one frozen in spreads.
+        "metric_units": t5cfg.units_of(cfg.metric),
         "estimator": cfg.estimator,
         "k_sigma": float(cfg.k_sigma),
         "n": int(est["n"]),

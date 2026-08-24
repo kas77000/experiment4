@@ -142,6 +142,11 @@ def main():
     summary.to_csv(dest, index=False)
     print(f"\nWrote {dest}")
 
+    lines = config.metric_source_lines(r["strategy"] for r in results)
+    if lines:
+        print("\n=== Metric source ===")
+        print("\n".join(lines))
+
     # A region code that is not in REGION_NAMES is usually a new venue -- but it
     # is also exactly what a typo'd Sym suffix looks like, and that would create
     # a phantom cell with its own band. Say so here as well as in tier5.fit:

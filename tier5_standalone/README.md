@@ -6,6 +6,13 @@ why.
 
     RANGE = centre − k·scale  ..  centre + k·scale
 
+The metric is performance **normalised by the spread**, so the bounds come out
+in **spreads**, not bps. A 12 bps miss is noise in a wide Indian small cap and a
+serious miss in a tight Japanese large cap; dividing by the spread puts every
+name and every region on one scale before the band is fitted. The extract
+supplies that column already divided — see
+[EXTRACT_COLUMNS.md](EXTRACT_COLUMNS.md).
+
 One band per **region × strategy**. Region comes from the `Sym` suffix, strategy
 from the `Strategy` column, and the period from the `Date` column, so nothing
 has to be typed on the command line and no run can be mislabelled.
@@ -58,8 +65,15 @@ python -m tier5.fit --n 6000
 
 ## Pointing it at your data
 
-**1. Inspect the extract first.** This tells you the two things a column name
-cannot: which sign convention `Pvwap` uses and what the units are.
+**Which columns to export:** see [EXTRACT_COLUMNS.md](EXTRACT_COLUMNS.md) —
+which seven are required, which spread-normalised column each strategy bands,
+which are needed only in the scored period, and which are recorded at fit time
+and cannot be backfilled later.
+
+**1. Inspect the extract first.** This tells you the things a column name
+cannot: which spread-normalised column each strategy will be banded on (section
+**1b**), which sign convention the performance columns use, and what the units
+are.
 
 ```bash
 python check_extract.py your_file.csv
@@ -71,16 +85,22 @@ the canonical names, so there is nothing to map. Not a fault, just don't use the
 demo file to sanity-check this step.)
 
 **2. Edit `config.py` → `COLUMN_MAP`** so it matches your column names. It ships
-wired for `aggrTgtId` / `Strategy` / `Sym` / `Pvwap` / `Sprd` / `%Adv` / `Vol` /
-`PR` / `Dur` / `Date`.
+wired for `aggrTgtId` / `Strategy` / `Sym` / `Date` / `ePvwap/Sprd` / `eIS/Sprd`
+/ `Pvwap` / `Sprd` / `%Adv` / `Vol` / `PR` / `Dur`.
 
-Three columns carry more weight than the rest here:
+Four columns carry more weight than the rest here:
 
 | Column | Becomes | Why it matters |
 |---|---|---|
 | `Sym` | region, from the last two characters | `0700 HK` → `HK`. Drives the folder split. |
-| `Strategy` | strategy | Drives the folder split. |
+| `Strategy` | strategy | Drives the folder split, **and picks the metric column**. |
 | `Date` | the period label | Names the output folders and powers the overlap check. |
+| `ePvwap/Sprd` or `eIS/Sprd` | the banded metric | Which one is chosen per strategy by `METRIC_BY_STRATEGY`. |
+
+`METRIC_BY_STRATEGY` maps VWAP to the interval-VWAP column and PART/POV to the
+arrival column. Those two benchmarks must never share a band, which is why the
+choice is made per strategy and printed on every run — a band on the wrong
+benchmark still fits and still looks like a curve.
 
 `Date` is optional. Without it, periods fall back to `--label` and the overlap
 check is skipped — you lose the safety net, not the results.
@@ -168,7 +188,7 @@ caption and still counted in every number.
 |---|---|---|
 | `--csv PATH` | — | The extract. Omit for a synthetic demo book. |
 | `--k` | `3.0` | Scales either side of the centre. |
-| `--metric` | `slippage_bps` | Also `perf_in_spreads`, `perf_norm`. |
+| `--metric` | `perf_in_spreads` | Also `slippage_bps` (bps), `perf_norm` (sigma). |
 | `--estimator` | `classical` | `classical` = mean ± k·sd. `robust` = median ± k·1.4826·MAD. |
 | `--bands-dir` | `bands` | Where band JSON is written. |
 | `--out-dir` | `outputs` | Where curves and evidence go. |

@@ -17,6 +17,7 @@ import os
 import numpy as np
 import pandas as pd
 
+import config
 from tca import dataset, report, schema
 from tier5 import band, cells, config as t5cfg, curve, persist
 
@@ -70,6 +71,19 @@ def score_frame(df, base_cfg, *, bands_dir: str, out_dir: str,
             continue
 
         frozen, cfg, reference = persist.load(path, base_cfg)
+
+        # A band frozen on a different metric is in different units. Scoring it
+        # alongside the others would put bps bounds and spread bounds in one
+        # summary table, where nothing marks which row is which.
+        if cfg.metric != base_cfg.metric:
+            row["skipped"] = True
+            row["reason"] = (
+                f"band was frozen on {cfg.metric!r} "
+                f"({t5cfg.units_of(cfg.metric)}) but this run bands "
+                f"{base_cfg.metric!r} ({t5cfg.units_of(base_cfg.metric)}). "
+                f"Those are different units -- refit this cell.")
+            results.append(row)
+            continue
 
         b_lo, b_hi = cells.date_range(g)
         f_lo = pd.Timestamp(frozen["fit_date_min"]) if frozen["fit_date_min"] else None
@@ -131,7 +145,8 @@ def score_frame(df, base_cfg, *, bands_dir: str, out_dir: str,
             subtitle=f"band frozen on {frozen.get('fit_period')}"
                      f"  --  the dashed curve is that band, NOT a refit",
             k=float(frozen["k_sigma"]),
-            normal_label="frozen band's normal")
+            normal_label="frozen band's normal",
+            units=frozen.get("metric_units", ""))
 
         results.append(row)
     return results
@@ -164,6 +179,12 @@ def main():
               "band on\n  an earlier window.")
         raise SystemExit(2)
 
+    units = t5cfg.units_of(t5cfg.CONFIG.metric)
+    lines = config.metric_source_lines(r["strategy"] for r in results)
+    if lines:
+        print("\n=== Metric source ===")
+        print("\n".join(lines))
+
     for r in results:
         print(f"\n  {r['region']} / {r['strategy']}")
         if r["skipped"]:
@@ -171,7 +192,7 @@ def main():
             continue
         ratio = (r["flag_rate_pct"] / r["fit_flag_rate_pct"]
                  if r["fit_flag_rate_pct"] else float("nan"))
-        print(f"    band        {r['lo']:.2f} .. {r['hi']:.2f}   (frozen)")
+        print(f"    band        {r['lo']:.2f} .. {r['hi']:.2f} {units}  (frozen)")
         print(f"    fit book:   {r['fit_flag_rate_pct']:.2f}% outside")
         print(f"    {r['period']}:    {r['n']:,} orders, {r['n_flagged']} flagged, "
               f"{r['flag_rate_pct']:.2f}% outside"

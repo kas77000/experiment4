@@ -5,13 +5,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tca import schema
+from tca import pipeline, schema
 from tier5 import cells, config as t5cfg, fit, score
 
 
 def _cell(region, strategy, n, mu, sd, start, seed):
     rng = np.random.default_rng(seed)
-    return pd.DataFrame({
+    return pipeline.add_metric(pd.DataFrame({
         schema.ORDER_ID: [f"{region}{strategy}{i}" for i in range(n)],
         schema.MARKET: region,
         schema.ALGO: strategy,
@@ -21,7 +21,7 @@ def _cell(region, strategy, n, mu, sd, start, seed):
         schema.VOLATILITY: rng.uniform(100.0, 250.0, n),
         schema.DURATION_MIN: rng.uniform(10.0, 300.0, n),
         schema.ORDER_DATE: pd.bdate_range(start, periods=n).astype(str),
-    })
+    }))
 
 
 @pytest.fixture

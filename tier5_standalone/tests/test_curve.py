@@ -105,3 +105,21 @@ def test_normal_label_is_overridable(tmp_path, sample):
                      normal_label="frozen band's normal")
     assert os.path.exists(str(tmp_path / "c.png"))
     assert "Wrote" in msg
+
+
+def test_caption_states_the_units_of_the_axis():
+    """A bare "-5.59" on the x-axis is unreadable, and bps is the wrong guess."""
+    text = curve.caption(n=260, k=3.0, outside=0.0808, n_offscreen=0,
+                         units="spreads")
+    assert "spreads" in text
+
+
+def test_caption_still_reports_offscreen_orders():
+    text = curve.caption(n=260, k=3.0, outside=0.08, n_offscreen=2,
+                         units="spreads")
+    assert "2" in text and "still counted" in text
+
+
+def test_caption_omits_units_when_there_are_none():
+    text = curve.caption(n=10, k=3.0, outside=0.0, n_offscreen=0, units="")
+    assert "()" not in text

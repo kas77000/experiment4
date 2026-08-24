@@ -79,6 +79,9 @@ DIAGNOSTIC = [REVERSION_BPS, PASSIVE_FILL_PCT, AUCTION_PCT, MOMENTUM_BPS]
 
 # Numeric columns to coerce on load.
 NUMERIC = [
+    # PERF_IN_SPREADS is normally derived, but an extract may supply it
+    # pre-divided (e.g. `ePvwap/Sprd`), in which case it arrives as text.
+    PERF_IN_SPREADS,
     SLIPPAGE_BPS, SPREAD_BPS, QUANTITY, NOTIONAL,
     PCT_ADV, PARTICIPATION, DURATION_MIN, VOLATILITY,
     REVERSION_BPS, PASSIVE_FILL_PCT, AUCTION_PCT, MOMENTUM_BPS,
