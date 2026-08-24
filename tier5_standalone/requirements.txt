@@ -1,0 +1,15 @@
+# Shared pipeline + the Gaussian band
+pandas>=2.0
+numpy>=1.24
+
+# D'Agostino K2 normality test and the QQ plot
+scipy>=1.10
+
+# The Gaussian curve (tier5/curve.py) and the QQ plot. Nothing in the fitting
+# or scoring path imports either, so the folder still works without them --
+# it prints "Curve skipped (seaborn not installed)" and carries on.
+matplotlib>=3.7
+seaborn>=0.13
+
+# Tests only
+pytest>=7.0
