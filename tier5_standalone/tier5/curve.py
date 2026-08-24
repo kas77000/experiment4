@@ -36,21 +36,44 @@ def view_range(x, lo: float, hi: float, scale: float) -> tuple[float, float]:
             max(hi + 0.5 * scale, float(np.percentile(x, 99.8))))
 
 
+# Roughly what fits across a 9-inch figure at the default label size. A longer
+# line is not wrapped by matplotlib -- it is silently cut off at BOTH ends, so
+# the reader loses the start of the sentence as well as the end.
+MAX_CAPTION_CHARS = 82
+
+
 def caption(*, n: int, k: float, outside: float, n_offscreen: int,
-            units: str) -> str:
+            units: str, data_min: float | None = None,
+            data_max: float | None = None) -> str:
     """The line under the x-axis: what the axis is in, and what it summarises.
 
     The units matter more than they look. A band drawn at -5.59 is five and a
     half SPREADS wide, not five and a half bps, and a reader who assumes bps
     reads the picture as a rounding error.
+
+    The offscreen note needs care for the opposite reason. `view_range` clips
+    at the 0.2nd and 99.8th percentiles, so the number of orders beyond the
+    frame is ALWAYS about 0.4% of n -- 188 on a 47,000-order book, whatever
+    those orders look like. Printed as a bare count it reads as a finding, and
+    a reader reasonably asks how 188 orders escaped. So say the rule that
+    produced it, give the share, and spend the space on the fact the clipped
+    view actually hides: how far the worst orders really reach.
     """
     axis = f"metric in {units}" if units else "metric"
-    text = (f"{axis}    n = {n:,}    k = {k:g}    "
-            f"outside the band: {100 * outside:.2f}%")
+    # A solved k arrives as 4.339160209. Two decimals is the whole signal, and
+    # the extra digits read as false precision on a quantile of 47,000 orders.
+    k_txt = f"{k:g}" if float(k).is_integer() else f"{k:.2f}"
+    lines = [f"{axis}    n = {n:,}    k = {k_txt}    "
+             f"outside the band: {100 * outside:.2f}%"]
     if n_offscreen:
-        text += (f"    ({n_offscreen} order(s) beyond this view, still "
-                 f"counted above)")
-    return text
+        lines.append(f"view clipped at the 0.2/99.8 percentiles, so {n_offscreen} "
+                     f"orders ({100 * n_offscreen / n:.1f}%) lie beyond it")
+        if data_min is not None and data_max is not None:
+            lines.append(f"They reach {data_min:.1f} / {data_max:.1f}, and are "
+                         f"counted in every number above.")
+        else:
+            lines.append("They are counted in every number above.")
+    return "\n".join(lines)
 
 
 def plot(x, *, centre: float, scale: float, lo: float, hi: float,
@@ -119,7 +142,8 @@ def plot(x, *, centre: float, scale: float, lo: float, hi: float,
 
     ax.set_title(title, fontsize=13)
     text = caption(n=int(x.size), k=k, outside=outside,
-                   n_offscreen=n_offscreen, units=units)
+                   n_offscreen=n_offscreen, units=units,
+                   data_min=float(x.min()), data_max=float(x.max()))
     if subtitle:
         text = f"{subtitle}\n{text}"
     ax.set_xlabel(text)
