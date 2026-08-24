@@ -25,12 +25,15 @@ from tca import pipeline, report, schema
 from tier5 import config as t5cfg, fit, score
 
 
-def _load(path: str) -> pd.DataFrame:
+def _load(path: str):
+    """Returns (frame, metric_supplied). The flag says whether the extract
+    carried the pre-normalised column or the pipeline had to derive one -- a
+    difference that is invisible in the frame afterwards."""
     raw = pd.read_csv(path)
-    df, _ = pipeline.prepare(raw, config.COLUMN_MAP, config.DATA,
-                             config.SLIPPAGE_SIGN,
-                             pre_transform=getattr(config, "PRE_TRANSFORM", None))
-    return df
+    df, rep = pipeline.prepare(raw, config.COLUMN_MAP, config.DATA,
+                               config.SLIPPAGE_SIGN,
+                               pre_transform=getattr(config, "PRE_TRANSFORM", None))
+    return df, rep.metric_supplied
 
 
 def run(mode: str, directory: str, *, bands_dir: str, out_dir: str, cfg,
@@ -44,14 +47,17 @@ def run(mode: str, directory: str, *, bands_dir: str, out_dir: str, cfg,
     results, failures = [], []
     for path in paths:
         try:
-            df = _load(path)
+            df, supplied = _load(path)
             if mode == "fit":
-                results += fit.fit_frame(df, cfg, bands_dir=bands_dir,
-                                         out_dir=out_dir, source_csv=path,
-                                         force=force)
+                new = fit.fit_frame(df, cfg, bands_dir=bands_dir,
+                                    out_dir=out_dir, source_csv=path,
+                                    force=force)
             else:
-                results += score.score_frame(df, cfg, bands_dir=bands_dir,
-                                             out_dir=out_dir, label=label)
+                new = score.score_frame(df, cfg, bands_dir=bands_dir,
+                                        out_dir=out_dir, label=label)
+            for r in new:
+                r["metric_supplied"] = supplied
+            results += new
         except score.LeakageError as exc:
             # Not a broken file: a refusal. Almost always one systemic mistake
             # (the wrong window exported) hitting every cell at once, so it is
@@ -142,7 +148,9 @@ def main():
     summary.to_csv(dest, index=False)
     print(f"\nWrote {dest}")
 
-    lines = config.metric_source_lines(r["strategy"] for r in results)
+    lines = config.metric_source_lines(
+        (r["strategy"] for r in results),
+        supplied=all(r.get("metric_supplied", True) for r in results))
     if lines:
         print("\n=== Metric source ===")
         print("\n".join(lines))

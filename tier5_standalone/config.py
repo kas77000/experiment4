@@ -209,16 +209,36 @@ def _metric_in_spreads(df: pd.DataFrame):
     return out
 
 
-def metric_source_lines(strategies) -> list[str]:
+def metric_source_lines(strategies, supplied: bool = True) -> list[str]:
     """Printable lines naming the source column behind each strategy's band.
 
     Takes strategy names rather than a frame, so it works after the pipeline
     has renamed the vendor columns away -- which is where fit and batch are by
     the time they know which cells exist.
+
+    `supplied` says whether the extract actually carried a pre-normalised
+    column (CleanReport.metric_supplied). It matters because this function
+    otherwise reports what the CONFIG says should have been used, which is a
+    claim rather than a check: with the source column absent the pipeline
+    quietly derives slippage_bps / spread_bps instead, producing a number of
+    the right magnitude against the wrong benchmark. Printing "VWAP ->
+    ePvwap/Sprd" in that situation is worse than printing nothing.
     """
     seen = sorted({str(s).strip().upper() for s in strategies})
     if not seen:
         return []
+
+    if not supplied:
+        wanted = sorted({metric_column_for(s)[0] for s in seen})
+        return [
+            f"    NOT FOUND in the extract: {', '.join(wanted)}",
+            "",
+            "    The band was fitted on slippage_bps / spread_bps instead, which",
+            "    the pipeline derived. That is a DIFFERENT BENCHMARK of a similar",
+            "    magnitude, so it will not look wrong. Add the column to the",
+            "    export, or point this strategy at one it has in",
+            "    config.METRIC_BY_STRATEGY.",
+        ]
 
     lines, fallbacks = [], []
     width = max(len(s) for s in seen)

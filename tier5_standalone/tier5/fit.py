@@ -164,7 +164,9 @@ def main():
     # Which column each strategy's band was built from. Stated out loud because
     # choosing the wrong one is invisible in the output: the band still fits and
     # the curve still looks like a curve, it is just the wrong benchmark.
-    lines = config.metric_source_lines(r["strategy"] for r in results)
+    lines = config.metric_source_lines(
+        (r["strategy"] for r in results),
+        supplied=clean_report.metric_supplied)
     if lines:
         print("\n=== Metric source ===")
         print("\n".join(lines))

@@ -215,7 +215,9 @@ def main():
         raise SystemExit(2)
 
     units = t5cfg.units_of(t5cfg.CONFIG.metric)
-    lines = config.metric_source_lines(r["strategy"] for r in results)
+    lines = config.metric_source_lines(
+        (r["strategy"] for r in results),
+        supplied=clean_report.metric_supplied)
     if lines:
         print("\n=== Metric source ===")
         print("\n".join(lines))
