@@ -30,6 +30,7 @@ class CleanReport:
     dropped_data_error: int
     rows_out: int
     dropped_no_metric: int = 0     # supplied metric column present but null
+    metric_supplied: bool = False  # metric came from the extract, not derived
     norm_full_pct: float = 0.0     # % of rows using spread+vol normalization
 
     def as_text(self) -> str:
@@ -41,8 +42,11 @@ class CleanReport:
             f"  - |perf| data error:     {self.dropped_data_error:,}\n"
             f"  - no metric value:       {self.dropped_no_metric:,}\n"
             f"  rows out:                {self.rows_out:,}\n"
-            f"  vol-normalized:          {self.norm_full_pct:.1f}%"
-            f"  (rest fall back to spread-only)"
+            f"  metric:                  "
+            + ("supplied by the extract\n" if self.metric_supplied
+               else "DERIVED as slippage_bps / spread_bps\n")
+            + f"  vol-normalized:          {self.norm_full_pct:.1f}%"
+              f"  (rest fall back to spread-only)"
         )
 
 
@@ -285,8 +289,14 @@ def prepare(df_raw: pd.DataFrame, column_map: dict, cfg, sign_convention: str,
     comparison in run.py meaningful.
     """
     df = load_orders(df_raw, column_map, pre_transform=pre_transform)
+    # Recorded BEFORE add_metric, which is the step that erases the difference:
+    # afterwards the column exists either way and nothing can tell whether the
+    # extract supplied it or the pipeline computed it from a different
+    # benchmark. Every caller that names the source column depends on this.
+    supplied = schema.PERF_IN_SPREADS in df.columns
     df = normalize_units(df, cfg)
     df, report = clean(df, cfg, sign_convention)
+    report.metric_supplied = supplied
     df = add_metric(df)
     df = add_sigma_expected(df, cfg)
     df = add_norm_metric(df)
