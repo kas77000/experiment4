@@ -22,7 +22,7 @@ import pandas as pd
 
 import config
 from tca import pipeline, report, schema
-from tier5 import config as t5cfg, fit, score
+from tier5 import compat, config as t5cfg, fit, score
 
 
 def _load(path: str):
@@ -33,6 +33,7 @@ def _load(path: str):
     df, rep = pipeline.prepare(raw, config.COLUMN_MAP, config.DATA,
                                config.SLIPPAGE_SIGN,
                                pre_transform=getattr(config, "PRE_TRANSFORM", None))
+    compat.check_report(rep)
     return df, rep.metric_supplied
 
 

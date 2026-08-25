@@ -19,7 +19,7 @@ import pandas as pd
 
 import config
 from tca import dataset, report, schema
-from tier5 import band, cells, config as t5cfg, curve, persist
+from tier5 import band, cells, compat, config as t5cfg, curve, persist
 
 
 class LeakageError(RuntimeError):
@@ -196,6 +196,7 @@ def main():
     args = ap.parse_args()
 
     df, clean_report = dataset.load_prepared(args)
+    compat.check_report(clean_report)
 
     print(report.header("TIER 5 --- SCORE AGAINST FROZEN BANDS"))
     print("\n=== Cleaning ===")

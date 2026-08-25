@@ -20,8 +20,8 @@ import numpy as np
 
 import config
 from tca import dataset, report, schema
-from tier5 import (band, budget, cells, config as t5cfg, curve, normality,
-                   persist)
+from tier5 import (band, budget, cells, compat, config as t5cfg, curve,
+                   normality, persist)
 
 
 def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
@@ -178,6 +178,7 @@ def main():
         cfg = dataclasses.replace(cfg, **overrides)
 
     df, clean_report = dataset.load_prepared(args)
+    compat.check_report(clean_report)
 
     print(report.header("TIER 5 --- FIT AND FREEZE"))
     print("\n=== Cleaning ===")
