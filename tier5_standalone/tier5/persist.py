@@ -69,7 +69,10 @@ def _reference(df: pd.DataFrame, cfg, est: dict, flag_rate_pct: float) -> dict:
 
 def save(est: dict, cfg, path: str, *, region: str, strategy: str,
          source_csv: str, period: str | None, df: pd.DataFrame,
-         flag_rate_pct: float, budget: dict | None = None) -> str:
+         flag_rate_pct: float, budget: dict | None = None,
+         k_floor: float | None = None,
+         k_from_coverage: float | None = None,
+         k_floored: bool = False) -> str:
     """Write one frozen band to JSON."""
     e = cfg.estimator
     d_lo, d_hi = cells.date_range(df)
@@ -94,8 +97,15 @@ def save(est: dict, cfg, path: str, *, region: str, strategy: str,
         # or it is the k that delivered a stated review load on this cell.
         "k_source": ("target_review_count"
                      if getattr(cfg, "target_review_count", None) is not None
+                     else "k_floor" if k_floored
                      else "target_flag_rate"
                      if cfg.target_flag_rate is not None else "fixed"),
+        # Both bounds of the shipped rule, always, so which one bound this cell
+        # is a fact in the file rather than something to re-derive.
+        "k_floor": (float(k_floor) if k_floor is not None else None),
+        "k_from_coverage": (float(k_from_coverage)
+                            if k_from_coverage is not None
+                            and k_from_coverage == k_from_coverage else None),
         "target_flag_rate": (float(cfg.target_flag_rate)
                              if cfg.target_flag_rate is not None else None),
         # The standard this band was cut to, and the k a NORMAL book would

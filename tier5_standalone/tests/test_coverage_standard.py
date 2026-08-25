@@ -45,20 +45,24 @@ def _fit(tmp_path, df=None, **over):
 
 class TestTheStandardIsTheDefault:
     def test_config_states_a_coverage_not_a_flag_rate(self):
-        assert t5cfg.COVERAGE_PCT == 99.9
+        """The rule is a coverage; the value is policy and may move."""
+        assert 90.0 < t5cfg.COVERAGE_PCT < 100.0
 
     def test_the_default_config_already_solves_for_it(self):
         """No flag, no argument: a bare fit applies the standard."""
-        assert t5cfg.CONFIG.target_flag_rate == pytest.approx(0.1)
+        assert t5cfg.CONFIG.target_flag_rate == pytest.approx(
+            100.0 - t5cfg.COVERAGE_PCT)
 
     def test_a_bare_fit_delivers_the_stated_coverage(self, tmp_path):
         r = _fit(tmp_path)
-        assert r["flag_rate_pct"] == pytest.approx(0.1, abs=0.02)
+        # <= not ==: the floor may widen past the target, never below it.
+        assert r["flag_rate_pct"] <= 100.0 - t5cfg.COVERAGE_PCT + 0.02
 
-    def test_a_bare_fit_does_not_use_k_three(self, tmp_path):
-        """The whole point: on a fat book 99.9% costs far more than 3."""
+    def test_a_bare_fit_is_never_tighter_than_the_floor(self, tmp_path):
+        """The whole point: a fat book costs far more than a textbook 3."""
         r = _fit(tmp_path)
-        assert r["k_used"] > 4.0
+        assert r["k_used"] >= t5cfg.K_FLOOR
+        assert r["k_used"] > 3.0
 
     def test_it_is_still_centre_plus_k_scale(self, tmp_path):
         r = _fit(tmp_path)
@@ -122,8 +126,9 @@ class TestProvenance:
     def test_the_band_records_the_standard_it_was_cut_to(self, tmp_path):
         r = _fit(tmp_path)
         saved = json.loads(open(r["band_path"]).read())
-        assert saved["coverage_pct"] == pytest.approx(99.9)
-        assert saved["k_if_normal"] == pytest.approx(3.291, abs=0.005)
+        assert saved["coverage_pct"] == pytest.approx(t5cfg.COVERAGE_PCT)
+        assert saved["k_if_normal"] == pytest.approx(
+            normality.k_if_normal(t5cfg.COVERAGE_PCT), abs=0.005)
         assert saved["k_sigma"] == pytest.approx(r["k_used"])
 
     def test_the_gap_between_the_two_ks_is_the_non_normality(self, tmp_path):

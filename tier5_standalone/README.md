@@ -52,7 +52,8 @@ python -m tier5.compat
 ```
 OK -- config.py, tca/ and tier5/ are the same release.
     config         ...	ier5_standalone\config.py
-    tca.report     ...	ier5_standalone	caeport.py
+    tca.report     ...	ier5_standalone	ca
+eport.py
     ...
 ```
 
@@ -242,13 +243,40 @@ circular — use `fit` + `score` for a number you can defend.
 
 ---
 
-## The standard: 99.9% coverage, set once
+## The standard: the wider of 4 sigma and 99.5% coverage
 
 **You do not pass anything on the command line.** The rule lives in
 `tier5/config.py`:
 
 ```python
-COVERAGE_PCT = 99.9
+COVERAGE_PCT = 99.5
+K_FLOOR      = 4.0
+
+# k = max(K_FLOOR, k that delivers COVERAGE_PCT)
+```
+
+The two bounds catch opposite failures, which is why neither alone is enough:
+
+- **Coverage** widens a band whose tail is fatter than a Gaussian assumes. A
+  fixed `k = 4` on the real HK book leaves ~0.9% outside, not the 0.006% it
+  advertises — a fixed multiple under-delivers exactly where the risk is.
+- **The floor** stops a well-behaved cell being handed an absurdly tight band.
+  A near-normal cell reaches 99.5% at `k = 2.92`; shipping that beside HK's
+  4.06 would give the quietest desk the harshest threshold.
+
+Taking the max means the band is never tighter than *either* bound allows, and
+both numbers are printed per cell so which one bound is never a guess:
+
+```
+  AX / VWAP   n = 8,000
+    RANGE       -4.62 .. 3.89 spreads
+    k            4.00      <- HELD AT THE 4 FLOOR  (99.5% needed only 2.92)
+    in-sample flagged: 0.04%
+
+  HK / VWAP   n = 46,950
+    RANGE      -11.18 .. 10.46 spreads
+    k            4.06      <- what 99.5% coverage cost here  (2.81 if normal, floor 4)
+    in-sample flagged: 0.50%
 ```
 
 Every run, every region, every strategy, every refit applies it. `k` is an
@@ -288,10 +316,15 @@ Change one line. Nothing else needs editing and no command changes:
 
 | `COVERAGE_PCT` | k if normal | k on this book | band (spreads) | to review |
 |---|---|---|---|---|
-| 99.00 | 2.58 | 3.61 | −9.98 .. 9.27 | 39/month |
+| 99.00 | 2.58 | 3.61 → **4.00** (floored) | −11.06 .. 10.31 | 20/month |
+| **99.50** | **2.81** | **4.06** | **−11.18 .. 10.46** | **20/month** |
 | 99.73 ("3σ") | 3.00 | 4.44 | −12.19 .. 11.47 | 11/month |
-| **99.90** | **3.29** | **4.97** | **−13.59 .. 12.87** | **4/month** |
+| 99.90 | 3.29 | 4.97 | −13.59 .. 12.87 | 4/month |
 | 99.95 | 3.48 | 5.27 | −14.40 .. 13.68 | 2/month |
+
+Note where 99.5% lands on this book: it needs `k = 4.06`, so **the floor and
+the coverage bound almost coincide** and the rule is very nearly "4 sigma".
+Tighten `COVERAGE_PCT` if you want the coverage half to actually do work.
 
 Every band file records what it was cut to, so `k = 4.97` is never somebody's
 guess a year from now:
