@@ -75,6 +75,22 @@ class Tier5Config:
     # measurement, and is the one that carries information.
     target_flag_rate: float | None = None
 
+    # --- or: pick the review load in ORDERS and let each cell supply its own
+    # k. Orders per cell per MONTH. When set, both k_sigma and
+    # target_flag_rate are ignored and every cell converts this budget into
+    # its own rate using its own volume and fit window -- see budget.py.
+    #
+    # Why a count rather than a percentage: a rate is only a workload once you
+    # know the volume. 0.5% is twenty orders a month on a 47k book and one a
+    # quarter on a thin one, so one rate across twelve cells gives the busy
+    # desks all the work. A count gives every desk the same load, which is
+    # what "we can explain two a month" actually means.
+    #
+    # k_sigma becomes a FLOOR: the budget may widen a band, never narrow one.
+    # Without that a 400-order cell asking for 2 a month would be handed a
+    # 6% flag rate, a tighter band than the busy desk beside it.
+    target_review_count: float | None = None
+
     # --- which metric to band --------------------------------------------
     #   PERF_IN_SPREADS -> slippage / spread          (the default)
     #   SLIPPAGE_BPS    -> raw slippage, in bps
