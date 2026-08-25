@@ -93,7 +93,8 @@ def save(est: dict, cfg, path: str, *, region: str, strategy: str,
         # next to one frozen in spreads.
         "metric_units": t5cfg.units_of(cfg.metric),
         "estimator": cfg.estimator,
-        "k_sigma": float(cfg.k_sigma),
+        "k_sigma": (None if cfg.k_sigma is None
+                    else float(cfg.k_sigma)),
         # How k was arrived at. A band at k = 5.9 must not read as somebody's
         # arbitrary guess six months from now: either it is the config default
         # or it is the k that delivered a stated review load on this cell.

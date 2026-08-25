@@ -53,6 +53,9 @@ def active_rule(cfg) -> str:
         return "absolute"
     if getattr(cfg, "band_percentile", None) is not None:
         return "percentile"
+    if getattr(cfg, "k_sigma", None) is None:
+        # No rule left and no multiple to fall back on.
+        return "percentile"
     return "fixed"
 
 
@@ -75,7 +78,7 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
     for region, strategy, g in cells.cells(df):
         period = cells.period_label(g) or "unknown-period"
         x = g[cfg.metric].to_numpy()
-        est = band.estimates(x, cfg.k_sigma)
+        est = band.estimates(x, cfg.k_sigma or 0.0)
         e = cfg.estimator
         lo, hi = est[f"lo_{e}"], est[f"hi_{e}"]
 
@@ -216,6 +219,11 @@ def main():
                          "that delivers this load from its own volume. Use "
                          "this when the answer is 'a couple a month' rather "
                          "than a percentage. --k becomes a floor.")
+    ap.add_argument("--percentile", type=float, default=None, metavar="PCT",
+                    help="Cut the band from percentiles ALONE: P(PCT) and "
+                         "P(100-PCT), with no sigma term and no absolute "
+                         "bound. The only rule here that assumes nothing about "
+                         "the distribution's shape.")
     ap.add_argument("--estimator", choices=list(t5cfg.ESTIMATORS),
                     help="Which estimator cuts the band.")
     ap.add_argument("--bands-dir", default="bands",
@@ -244,9 +252,17 @@ def main():
     if args.target_flag_rate is not None:
         overrides["target_flag_rate"] = args.target_flag_rate
     if args.target_review_count is not None:
-        # Same reason, plus: leaving the coverage default in place would trip
-        # the mutually-exclusive guard on every single run of this flag.
+        # Outranks the shipped rules by position in active_rule(), so unlike
+        # --k it has nothing to clear.
         overrides["target_review_count"] = args.target_review_count
+    if args.percentile is not None:
+        # Percentiles alone: every other rule has to be switched off, since
+        # each would otherwise outrank this one or widen it.
+        overrides["band_percentile"] = args.percentile
+        overrides["k_sigma"] = None
+        overrides["band_abs"] = None
+        overrides["target_flag_rate"] = None
+        overrides["target_review_count"] = None
     if overrides:
         cfg = dataclasses.replace(cfg, **overrides)
 
@@ -268,8 +284,11 @@ def main():
                   f"{100.0 - cfg.target_flag_rate:g}% coverage")
             print("  standard in tier5/config.py for this run.")
     elif rule_name == "percentile":
-        k_desc = (f"band = MAX(mean +/- {cfg.k_sigma:g}*sigma, "
-                  f"P{cfg.band_percentile:g}/P{100 - cfg.band_percentile:g})")
+        pc = cfg.band_percentile
+        k_desc = (f"band = P{pc:g} / P{100 - pc:g}  (percentiles only)"
+                  if cfg.k_sigma is None else
+                  f"band = MAX(mean +/- {cfg.k_sigma:g}*sigma, "
+                  f"P{pc:g}/P{100 - pc:g})")
     elif rule_name == "flag_rate":
         k_desc = (f"k=solved per cell for "
                   f"{100.0 - cfg.target_flag_rate:g}% coverage")
@@ -329,6 +348,15 @@ def main():
         elif r["rule"] is not None:
             d = r["rule"]
             ks, pc = cfg.k_sigma, cfg.band_percentile
+            if ks is None:
+                print(f"    P{pc:g} {d['hi']:>9.2f}      "
+                      f"P{100 - pc:g} {d['lo']:>9.2f}"
+                      f"      (no sigma term; centre and sigma above are "
+                      f"context only)")
+                print(f"    an order must miss by "
+                      f"{budget.miss_to_flag(r['lo'], r['hi'], r['centre']):.1f} "
+                      f"{units} to be flagged")
+                continue
             print(f"    mean + {ks:g}*sigma  {d['hi_sigma']:>9.2f}"
                   f"      P{pc:g}   {d['hi_pct']:>9.2f}"
                   f"   ->  hi  {d['hi']:>8.2f}  ({d['hi_binds']})")
@@ -384,12 +412,23 @@ def main():
         print("  tight to detect anything.")
     elif rule_name == "percentile":
         ks, pc = cfg.k_sigma, cfg.band_percentile
-        print(f"\n  Rule: hi = MAX(mean + {ks:g}*sigma, P{pc:g}),  "
-              f"lo = MIN(mean - {ks:g}*sigma, P{100 - pc:g})")
-        print("  set once in tier5/config.py (K_SIGMA, PERCENTILE_PCT). Both")
-        print("  candidates and the winner are printed per side above, because a")
-        print("  percentile that never binds is worth knowing about: it means the")
-        print("  the sigma term is doing the work and the net stands by unused.")
+        if ks is None:
+            print(f"\n  Rule: hi = P{pc:g},  lo = P{100 - pc:g}  -- percentiles "
+                  f"alone, no sigma term.")
+            print("  Set in tier5/config.py (K_SIGMA = None, PERCENTILE_PCT).")
+            print("  This assumes nothing about the shape of the distribution:")
+            print("  no centre, no scale, no implied symmetry. The cost is that")
+            print(f"  each bound rests on the {100 - pc:g}% of orders beyond it,")
+            print("  so it moves with the book -- including when the book gets")
+            print("  worse, which is the one time a threshold should not move.")
+        else:
+            print(f"\n  Rule: hi = MAX(mean + {ks:g}*sigma, P{pc:g}),  "
+                  f"lo = MIN(mean - {ks:g}*sigma, P{100 - pc:g})")
+            print("  set once in tier5/config.py (K_SIGMA, PERCENTILE_PCT). Both")
+            print("  candidates and the winner are printed per side above,")
+            print("  because a percentile that never binds is worth knowing")
+            print("  about: the sigma term is doing the work and the net is")
+            print("  standing by unused.")
         print("\n  These rates are IN-SAMPLE. Run tier5.score on a later period")
         print("  for a number that measures rather than defines.")
     elif rule_name == "flag_rate":

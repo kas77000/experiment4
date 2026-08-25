@@ -159,7 +159,11 @@ def evidence(df: pd.DataFrame, cfg) -> pd.DataFrame:
                "centre": centre, "scale": scale,
                "lo": e[f"lo_{est}"], "hi": e[f"hi_{est}"]}
 
-        cov = coverage_table(x, centre, scale, ks=(cfg.k_sigma,))
+        # With no sigma term in the band there is no multiple whose promise
+        # could be compared against delivery, so the coverage row is skipped
+        # rather than invented. The rest of the evidence still applies.
+        cov = (coverage_table(x, centre, scale, ks=(cfg.k_sigma,))
+               if cfg.k_sigma is not None else [])
         if len(cov):
             row["promised_outside_pct"] = float(cov.iloc[0]["promised_outside_pct"])
             row["actual_outside_pct"] = float(cov.iloc[0]["actual_outside_pct"])
