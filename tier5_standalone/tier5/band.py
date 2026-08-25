@@ -73,6 +73,75 @@ def estimates(x, k: float) -> dict:
     }
 
 
+def rule_bounds(x, centre: float, scale: float, *, k: float,
+                percentile: float) -> dict:
+    """The shipped rule, per side:
+
+        hi = MAX(centre + k*scale,  P(percentile))
+        lo = MIN(centre - k*scale,  P(100 - percentile))
+
+    Two properties distinguish this from a single symmetric multiple, and both
+    are the reason it is written this way.
+
+    IT IS PER SIDE. Slippage is skewed -- a book misses badly far more often
+    than it beats badly -- so forcing both tails through one k makes the band
+    wrong on at least one of them. Here each side takes whichever of its own
+    two candidates is wider, and the two can bind differently.
+
+    THE PERCENTILE IS A PERCENTILE. P99.5 leaves 0.5% of orders above it in
+    the upper tail. That is NOT the same as a "99.5% coverage" band, which
+    splits 0.5% across both tails and therefore sits nearer P99.75. The
+    distinction is worth a paragraph because the two read identically in a
+    meeting and differ by a real amount on the page.
+
+    The sigma term is kept literal -- centre + k*scale, nothing solved, nothing
+    adjusted -- so that "mean plus four sigma" is visibly what it says.
+    """
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    out = {"hi": np.nan, "lo": np.nan,
+           "hi_sigma": np.nan, "lo_sigma": np.nan,
+           "hi_pct": np.nan, "lo_pct": np.nan,
+           "hi_binds": "", "lo_binds": "", "percentile": float(percentile),
+           "k": float(k)}
+    if x.size == 0:
+        return out
+
+    if np.isfinite(scale) and scale >= 0:
+        out["hi_sigma"] = centre + k * scale
+        out["lo_sigma"] = centre - k * scale
+
+    p = float(percentile) / 100.0
+    out["hi_pct"] = float(np.quantile(x, p))
+    out["lo_pct"] = float(np.quantile(x, 1.0 - p))
+
+    # np.fmax/fmin ignore a NaN candidate rather than poisoning the result, so
+    # a group with no usable scale still gets its percentile band instead of
+    # no band at all.
+    out["hi"] = float(np.fmax(out["hi_sigma"], out["hi_pct"]))
+    out["lo"] = float(np.fmin(out["lo_sigma"], out["lo_pct"]))
+    out["hi_binds"] = ("sigma" if out["hi"] == out["hi_sigma"] else "percentile")
+    out["lo_binds"] = ("sigma" if out["lo"] == out["lo_sigma"] else "percentile")
+    return out
+
+
+def apply_rule(est: dict, x, *, k: float, percentile: float) -> tuple[dict, dict]:
+    """Recut both estimators' bands with `rule_bounds`. Returns (est, detail).
+
+    The robust estimator gets the SAME percentile term -- a percentile of the
+    data does not depend on how the centre was estimated -- and its own sigma
+    term from the scaled MAD, so switching estimator still needs no refit.
+    """
+    est = dict(est)
+    detail = {}
+    for e in ("classical", "robust"):
+        r = rule_bounds(x, est[f"centre_{e}"], est[f"scale_{e}"],
+                        k=k, percentile=percentile)
+        est[f"lo_{e}"], est[f"hi_{e}"] = r["lo"], r["hi"]
+        detail[e] = r
+    return est, detail
+
+
 def fit(df: pd.DataFrame, cfg) -> pd.DataFrame:
     """Return a tidy band table with one row per (level, group).
 

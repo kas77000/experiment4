@@ -243,95 +243,69 @@ circular — use `fit` + `score` for a number you can defend.
 
 ---
 
-## The standard: the wider of 4 sigma and 99.5% coverage
+## The standard: MAX(mean + 4·sigma, P99.5), per side
 
 **You do not pass anything on the command line.** The rule lives in
 `tier5/config.py`:
 
 ```python
-COVERAGE_PCT = 99.5
-K_FLOOR      = 4.0
+K_SIGMA        = 4.0
+PERCENTILE_PCT = 99.5
 
-# k = max(K_FLOOR, k that delivers COVERAGE_PCT)
+# hi = MAX(mean + K_SIGMA*sigma,  P(PERCENTILE_PCT))
+# lo = MIN(mean - K_SIGMA*sigma,  P(100 - PERCENTILE_PCT))
 ```
 
-The two bounds catch opposite failures, which is why neither alone is enough:
-
-- **Coverage** widens a band whose tail is fatter than a Gaussian assumes. A
-  fixed `k = 4` on the real HK book leaves ~0.9% outside, not the 0.006% it
-  advertises — a fixed multiple under-delivers exactly where the risk is.
-- **The floor** stops a well-behaved cell being handed an absurdly tight band.
-  A near-normal cell reaches 99.5% at `k = 2.92`; shipping that beside HK's
-  4.06 would give the quietest desk the harshest threshold.
-
-Taking the max means the band is never tighter than *either* bound allows, and
-both numbers are printed per cell so which one bound is never a guess:
+The sigma term is **literal** — `centre + k*scale`, nothing solved, nothing
+adjusted — so "mean plus four sigma" is visibly what it says. Every fit prints
+both candidates and which one won, per side:
 
 ```
-  AX / VWAP   n = 8,000
-    RANGE       -4.62 .. 3.89 spreads
-    k            4.00      <- HELD AT THE 4 FLOOR  (99.5% needed only 2.92)
-    in-sample flagged: 0.04%
-
   HK / VWAP   n = 46,950
-    RANGE      -11.18 .. 10.46 spreads
-    k            4.06      <- what 99.5% coverage cost here  (2.81 if normal, floor 4)
-    in-sample flagged: 0.50%
+    centre      -0.36
+    scale        2.67
+    RANGE      -11.02 .. 10.30 spreads
+    mean + 4*sigma      10.30      P99.5        9.21   ->  hi     10.30  (sigma)
+    mean - 4*sigma     -11.02      P0.5       -10.03   ->  lo    -11.02  (sigma)
+    in-sample flagged: 0.54%
 ```
 
-Every run, every region, every strategy, every refit applies it. `k` is an
-**output**, printed beside the `k` a normal book would have needed:
+### Two properties worth knowing
 
-```
-$ python -m tier5.fit --csv orders.csv
+**It is per side.** Slippage is skewed — a book misses badly far more often
+than it beats badly — so forcing both tails through one multiple makes the band
+wrong on at least one of them. Each side takes whichever of *its own* two
+candidates is wider, and the two can bind differently.
 
-  metric=perf_in_spreads (spreads)  k=solved per cell for 99.9% coverage
-  HK / VWAP   n = 46,950
-    RANGE      -13.59 .. 12.87 spreads
-    k            4.97      <- what 99.9% coverage cost here  (3.29 if the book were normal)
-    an order must miss by 13.2 spreads to be flagged
-    in-sample flagged: 0.10%
-```
+**P99.5 is not "99.5% coverage".** P99.5 leaves 0.5% of orders above it in the
+upper tail alone. A 99.5%-coverage band splits that 0.5% across *both* tails
+and sits nearer P99.75. The two read identically in a meeting and differ by a
+real amount on the page.
 
-### Why a coverage and not a sigma multiple
+### Which term actually binds
 
-They are the same statement **only under a normal distribution**. "3 sigma" and
-"99.73% coverage" are two ways of saying one thing; 99.9% is 3.29 sigma. Real
-execution books are not normal, so the two come apart — and only one of them
-survives the split:
+On a book shaped like the real HK VWAP one, `mean ± 4σ` is **wider** than
+P99.5/P0.5 on both sides, so `MAX()` returns the sigma term and the percentile
+never fires:
 
-| you fix… | …and this floats | on a real HK VWAP book |
-|---|---|---|
-| the multiple at `k = 3` | the coverage | lands at **97.6%** — the threshold silently means something different in every cell |
-| the coverage at 99.9% | the multiple | came out at **4.97**, vs **3.29** if the book had been normal |
-
-The second is the systematic one. **The promise is what you defend; the
-multiple is only ever the means.** And the gap between those two `k` values —
-3.29 promised, 4.97 delivered — is this book's non-normality expressed as a
-single number, which is the shortest available answer to "why isn't it 3?"
-
-### Moving the whole desk
-
-Change one line. Nothing else needs editing and no command changes:
-
-| `COVERAGE_PCT` | k if normal | k on this book | band (spreads) | to review |
+| side | sigma term | percentile | band | binds |
 |---|---|---|---|---|
-| 99.00 | 2.58 | 3.61 → **4.00** (floored) | −11.06 .. 10.31 | 20/month |
-| **99.50** | **2.81** | **4.06** | **−11.18 .. 10.46** | **20/month** |
-| 99.73 ("3σ") | 3.00 | 4.44 | −12.19 .. 11.47 | 11/month |
-| 99.90 | 3.29 | 4.97 | −13.59 .. 12.87 | 4/month |
-| 99.95 | 3.48 | 5.27 | −14.40 .. 13.68 | 2/month |
+| hi | 10.30 | 9.21 | **10.30** | sigma |
+| lo | −11.02 | −10.03 | **−11.02** | sigma |
 
-Note where 99.5% lands on this book: it needs `k = 4.06`, so **the floor and
-the coverage bound almost coincide** and the rule is very nearly "4 sigma".
-Tighten `COVERAGE_PCT` if you want the coverage half to actually do work.
+That is not a fault — it is what the `MAX` is *for*. But it does mean the rule
+is effectively `mean ± 4σ` here, with the percentile standing by in case a
+cell's tail is heavy enough to need it. Lower `K_SIGMA` and the percentile
+starts binding; raise it and it never will. Because both candidates print, this
+is never something to guess at.
 
-Every band file records what it was cut to, so `k = 4.97` is never somebody's
-guess a year from now:
+Every band file records the whole derivation:
 
 ```json
-"k_sigma": 4.97, "k_source": "target_flag_rate",
-"coverage_pct": 99.9, "k_if_normal": 3.291
+"k_source": "sigma_or_percentile",
+"band_rule": {"k_sigma": 4.0, "percentile": 99.5,
+              "hi_sigma": 10.30, "hi_pct": 9.21, "hi_binds": "sigma",
+              "lo_sigma": -11.02, "lo_pct": -10.03, "lo_binds": "sigma"}
 ```
 
 ### Overriding it for one run
@@ -342,8 +316,17 @@ and says so:
 | flag | means |
 |---|---|
 | `--target-review-count N` | N orders per cell **per month**, volume-aware. `--k` becomes a floor. |
-| `--target-flag-rate PCT` | a different coverage, as its complement |
-| `--k K` | a fixed multiple, no solving |
+| `--target-flag-rate PCT` | a two-sided coverage target; `k` is solved per cell |
+| `--k K` | a plain fixed multiple, no percentile term |
+
+Each switches the shipped rule off for that run. Verified end to end:
+
+```
+(no flags)               band = MAX(mean +/- 4*sigma, P99.5/P0.5)   -11.02 .. 10.30   0.54%
+--k 3                    k=3                                         -8.36 ..  7.64   2.37%
+--target-flag-rate 0.5   k=solved for 99.5% coverage                -11.18 .. 10.46   0.50%
+--target-review-count 2  k=solved for 2/month (floor k=4)           -14.37 .. 13.66   0.05%
+```
 
 ---
 

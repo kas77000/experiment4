@@ -63,14 +63,16 @@ def _band(tmp_path):
 # k = 3 explicitly, not "whatever CONFIG happens to hold". These tests are
 # about what a FIXED multiple does to a heavy book, so the multiple has to be
 # pinned or the test silently starts measuring the current policy instead.
-FIXED_K = dataclasses.replace(t5cfg.CONFIG, target_flag_rate=None, k_sigma=3.0)
+FIXED_K = dataclasses.replace(t5cfg.CONFIG, band_percentile=None,
+                              target_flag_rate=None, k_sigma=3.0)
 
 
-def test_the_shipped_default_is_the_coverage_standard():
-    """The rule lives in config.py, not on the command line."""
-    assert t5cfg.CONFIG.target_flag_rate == pytest.approx(
-        100.0 - t5cfg.COVERAGE_PCT)
-    assert t5cfg.CONFIG.k_sigma == t5cfg.K_FLOOR
+def test_the_shipped_default_is_the_per_side_rule_not_this_one():
+    """Coverage is an opt-in. The default is MAX(mean+k*sigma, P), so a
+    target_flag_rate left unset must NOT quietly become the standard."""
+    assert t5cfg.CONFIG.target_flag_rate is None
+    assert t5cfg.CONFIG.band_percentile == t5cfg.PERCENTILE_PCT
+    assert t5cfg.CONFIG.k_sigma == t5cfg.K_SIGMA
 
 
 def test_k_three_on_a_heavy_book_overshoots_badly(tmp_path):
@@ -84,13 +86,15 @@ def test_k_three_on_a_heavy_book_overshoots_badly(tmp_path):
 # --------------------------------------------------------------------------
 
 def test_target_rate_is_delivered_on_the_fit_book(tmp_path):
-    cfg = dataclasses.replace(t5cfg.CONFIG, target_flag_rate=0.5)
+    cfg = dataclasses.replace(t5cfg.CONFIG, band_percentile=None,
+                              target_flag_rate=0.5)
     res = _fit(tmp_path, cfg)
     assert res[0]["flag_rate_pct"] == pytest.approx(0.5, abs=0.05)
 
 
 def test_a_tighter_target_is_also_delivered(tmp_path):
-    cfg = dataclasses.replace(t5cfg.CONFIG, target_flag_rate=0.27)
+    cfg = dataclasses.replace(t5cfg.CONFIG, band_percentile=None,
+                              target_flag_rate=0.27)
     res = _fit(tmp_path, cfg)
     assert res[0]["flag_rate_pct"] == pytest.approx(0.27, abs=0.05)
 
@@ -105,14 +109,16 @@ def test_the_band_widens_rather_than_narrows(tmp_path):
 
 
 def test_the_solved_k_is_reported(tmp_path):
-    cfg = dataclasses.replace(t5cfg.CONFIG, target_flag_rate=0.5)
+    cfg = dataclasses.replace(t5cfg.CONFIG, band_percentile=None,
+                              target_flag_rate=0.5)
     res = _fit(tmp_path, cfg)
     assert res[0]["k_used"] > 3.0
 
 
 def test_the_band_file_records_the_k_actually_used(tmp_path):
     """Scoring must apply the same k that was fitted, not the config default."""
-    cfg = dataclasses.replace(t5cfg.CONFIG, target_flag_rate=0.5)
+    cfg = dataclasses.replace(t5cfg.CONFIG, band_percentile=None,
+                              target_flag_rate=0.5)
     res = _fit(tmp_path, cfg)
     saved = _band(tmp_path)
     assert saved["k_sigma"] == pytest.approx(res[0]["k_used"])
@@ -121,7 +127,8 @@ def test_the_band_file_records_the_k_actually_used(tmp_path):
 
 def test_the_band_file_says_how_k_was_chosen(tmp_path):
     """A band at k=5.9 must not look like somebody's arbitrary guess."""
-    cfg = dataclasses.replace(t5cfg.CONFIG, target_flag_rate=0.5)
+    cfg = dataclasses.replace(t5cfg.CONFIG, band_percentile=None,
+                              target_flag_rate=0.5)
     _fit(tmp_path, cfg)
     saved = _band(tmp_path)
     assert saved["k_source"] == "target_flag_rate"
@@ -137,7 +144,8 @@ def test_a_fixed_k_says_so_too(tmp_path):
 
 def test_bounds_stay_centre_plus_minus_k_scale(tmp_path):
     """Still the same method -- only k moved."""
-    cfg = dataclasses.replace(t5cfg.CONFIG, target_flag_rate=0.5)
+    cfg = dataclasses.replace(t5cfg.CONFIG, band_percentile=None,
+                              target_flag_rate=0.5)
     res = _fit(tmp_path, cfg)
     r = res[0]
     assert r["lo"] == pytest.approx(r["centre"] - r["k_used"] * r["scale"])
@@ -152,7 +160,8 @@ def test_each_cell_is_calibrated_separately(tmp_path):
     # Floor lowered out of the way: this test is about the COVERAGE rule
     # calibrating per cell, and a floor that catches both cells would flatten
     # exactly the difference being measured.
-    cfg = dataclasses.replace(t5cfg.CONFIG, target_flag_rate=0.5, k_sigma=1.0)
+    cfg = dataclasses.replace(t5cfg.CONFIG, band_percentile=None,
+                              target_flag_rate=0.5, k_sigma=1.0)
     res = _fit(tmp_path, cfg, df=pd.concat([a, b], ignore_index=True))
     ks = {r["strategy"]: r["k_used"] for r in res}
     assert ks["VWAP"] > ks["TWAP"]
@@ -164,7 +173,8 @@ def test_each_cell_is_calibrated_separately(tmp_path):
 
 @pytest.mark.parametrize("bad", [0.0, -1.0, 100.0, 150.0])
 def test_an_impossible_target_is_refused(tmp_path, bad):
-    cfg = dataclasses.replace(t5cfg.CONFIG, target_flag_rate=bad)
+    cfg = dataclasses.replace(t5cfg.CONFIG, band_percentile=None,
+                              target_flag_rate=bad)
     with pytest.raises(ValueError, match="target_flag_rate"):
         _fit(tmp_path, cfg)
 
