@@ -86,6 +86,21 @@ LEVEL_KEYS = {
 # net: it fires only if some cell's tail is so heavy that its own P99.5 lands
 # beyond nine sigma. Every fit prints both candidates and the winner per side,
 # so whether the net ever fires is a fact on the page, not an assumption.
+# None drops the sigma term entirely, leaving a band cut from the percentiles
+# alone. That is the only rule here that assumes nothing about the shape of the
+# distribution -- no centre, no scale, no implied symmetry -- which on a book
+# this far from normal is a genuine argument rather than a shortcut. What it
+# costs on the real HK VWAP book, with no sigma term:
+#
+#     PERCENTILE_PCT   band (spreads)     outside    to review    in sigma
+#         99.0         -9.07 ..   8.66     2.00%     78 / month      3.3
+#         99.5        -12.06 ..  11.72     1.00%     39 / month      4.5
+#         99.9        -17.41 ..  16.75     0.20%      7.8 / month    6.4
+#        99.95        -19.46 ..  18.98     0.10%      4.0 / month    7.2
+#
+# Note P99.95 lands almost exactly on the shipped +/-20 absolute band. The two
+# rules agree on this book today and would diverge as it changes: the
+# percentile follows the book, the absolute bound does not.
 K_SIGMA = 9.0
 PERCENTILE_PCT = 99.5
 
@@ -148,7 +163,7 @@ class Tier5Config:
     # --- the band ---------------------------------------------------------
     # How many scales either side of the centre. 3.0 promises 0.27% flagged
     # IF the data is normal, which is the assumption the report tests.
-    k_sigma: float = K_SIGMA
+    k_sigma: float | None = K_SIGMA
 
     # --- or: pick the review load and let the data supply k ---------------
     # A percentage. When set, k_sigma is IGNORED and each cell solves for the

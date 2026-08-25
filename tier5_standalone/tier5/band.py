@@ -51,8 +51,15 @@ _EMPTY = {
 }
 
 
-def estimates(x, k: float) -> dict:
-    """Both estimators and both bands for one group's metric array."""
+def estimates(x, k: float | None) -> dict:
+    """Both estimators and both bands for one group's metric array.
+
+    `k=None` means the active rule supplies the bounds itself (a percentile
+    band, an absolute one), so the mu +/- k*sigma pair here is a placeholder
+    that will be overwritten. Zero rather than an error: several callers ask
+    for the centre and scale and never look at lo/hi.
+    """
+    k = 0.0 if k is None else float(k)
     x = np.asarray(x, dtype=float)
     x = x[np.isfinite(x)]
     n = int(x.size)
@@ -73,7 +80,7 @@ def estimates(x, k: float) -> dict:
     }
 
 
-def rule_bounds(x, centre: float, scale: float, *, k: float,
+def rule_bounds(x, centre: float, scale: float, *, k: float | None,
                 percentile: float) -> dict:
     """The shipped rule, per side:
 
@@ -96,6 +103,12 @@ def rule_bounds(x, centre: float, scale: float, *, k: float,
 
     The sigma term is kept literal -- centre + k*scale, nothing solved, nothing
     adjusted -- so that "mean plus four sigma" is visibly what it says.
+
+    `k=None` drops the sigma term entirely, leaving a pure percentile band.
+    That is the one rule here which assumes nothing about the distribution --
+    no centre, no scale, no implied symmetry -- which on a book this far from
+    normal is a real argument. The cost is that each bound rests on only the
+    handful of orders beyond it.
     """
     x = np.asarray(x, dtype=float)
     x = x[np.isfinite(x)]
@@ -103,11 +116,11 @@ def rule_bounds(x, centre: float, scale: float, *, k: float,
            "hi_sigma": np.nan, "lo_sigma": np.nan,
            "hi_pct": np.nan, "lo_pct": np.nan,
            "hi_binds": "", "lo_binds": "", "percentile": float(percentile),
-           "k": float(k)}
+           "k": (None if k is None else float(k))}
     if x.size == 0:
         return out
 
-    if np.isfinite(scale) and scale >= 0:
+    if k is not None and np.isfinite(scale) and scale >= 0:
         out["hi_sigma"] = centre + k * scale
         out["lo_sigma"] = centre - k * scale
 
@@ -125,7 +138,8 @@ def rule_bounds(x, centre: float, scale: float, *, k: float,
     return out
 
 
-def apply_rule(est: dict, x, *, k: float, percentile: float) -> tuple[dict, dict]:
+def apply_rule(est: dict, x, *, k: float | None,
+               percentile: float) -> tuple[dict, dict]:
     """Recut both estimators' bands with `rule_bounds`. Returns (est, detail).
 
     The robust estimator gets the SAME percentile term -- a percentile of the
