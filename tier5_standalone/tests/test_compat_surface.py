@@ -20,7 +20,7 @@ class TestItChecksEverythingTier5Uses:
     def test_every_declared_module_is_real(self):
         """The manifest must not drift into naming things that do not exist."""
         import importlib
-        for mod in compat.REQUIRED_TCA_SURFACE:
+        for mod in compat.REQUIRED_SURFACE:
             importlib.import_module(mod)
 
     def test_the_manifest_covers_what_the_code_actually_calls(self):
@@ -39,7 +39,7 @@ class TestItChecksEverythingTier5Uses:
                     continue
                 used.setdefault(f"tca.{mod}", set()).add(attr)
         for mod, attrs in used.items():
-            declared = set(compat.REQUIRED_TCA_SURFACE.get(mod, ()))
+            declared = set(compat.REQUIRED_SURFACE.get(mod, ()))
             assert attrs <= declared, f"{mod}: {attrs - declared} not in manifest"
 
 

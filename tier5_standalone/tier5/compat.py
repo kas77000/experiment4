@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import inspect
 
 # Attributes tier5 reads off a CleanReport. Each arrived alongside a tier5
 # feature that fails without it, so absence means the two halves disagree.
@@ -40,7 +41,13 @@ REQUIRED_REPORT_FIELDS = (
 # every incident. So this is the whole surface, and a test walks tier5/*.py and
 # fails if the code starts calling something this manifest does not list --
 # otherwise the hole reopens quietly the next time tier5 grows.
-REQUIRED_TCA_SURFACE = {
+REQUIRED_SURFACE = {
+    # The RELEASE is tca/ + tier5/ + config.py, not just the two folders. The
+    # top-level config.py is easy to miss precisely because it is not inside a
+    # directory anyone thinks to drag, and a stale one fails late and oddly.
+    "config":       ("COLUMN_MAP", "DATA", "SLIPPAGE_SIGN", "PRE_TRANSFORM",
+                     "REGION_NAMES", "METRIC_BY_STRATEGY",
+                     "metric_source_lines"),
     "tca.report":   ("header", "frame", "zone_summary"),
     "tca.dataset":  ("load_prepared", "add_common_args", "out_path"),
     "tca.pipeline": ("prepare", "CleanReport"),
@@ -52,10 +59,28 @@ REQUIRED_TCA_SURFACE = {
                      "SYMBOL", "VOLATILITY"),
 }
 
+# Calls tier5 makes whose PARAMETERS moved, not just their names. hasattr is
+# blind to these: `metric_source_lines` was present on the stale copy and the
+# run still died on
+#
+#     TypeError: metric_source_lines() got an unexpected keyword argument
+#     'supplied'
+#
+# A folder is compatible when the calls actually bind, so the ones that gained
+# arguments are checked against the real signature.
+REQUIRED_PARAMS = {
+    "config.metric_source_lines": ("supplied",),
+    "tca.pipeline.prepare":       ("pre_transform",),
+}
+
+
 _FIX = """
-  Nothing was fitted. Copy the WHOLE tier5_standalone folder across again --
-  tca/ and tier5/ are two halves of one release and cannot be updated
-  separately -- then delete every __pycache__ directory and re-run.
+  Nothing was fitted. Copy the WHOLE tier5_standalone folder across again.
+  The release is config.py + tca/ + tier5/ TOGETHER -- config.py sits at the
+  top level rather than inside a folder, which is exactly why it gets left
+  behind -- then delete every __pycache__ directory and re-run.
+
+  Check a copy before running anything:   python -m tier5.compat
 
   If this folder is a git clone, `git pull` instead.
 
@@ -79,7 +104,7 @@ def check_environment() -> None:
     and the path is the only thing that tells them apart.
     """
     problems, paths = [], []
-    for mod_name, attrs in REQUIRED_TCA_SURFACE.items():
+    for mod_name, attrs in REQUIRED_SURFACE.items():
         try:
             mod = importlib.import_module(mod_name)
         except Exception as exc:                        # noqa: BLE001
@@ -91,6 +116,30 @@ def check_environment() -> None:
         if missing:
             problems.append(f"    {mod_name} is missing: {', '.join(missing)}")
 
+        for dotted, params in REQUIRED_PARAMS.items():
+            owner, _, fn_name = dotted.rpartition(".")
+            if owner != mod_name:
+                continue
+            fn = getattr(mod, fn_name, None)
+            if fn is None:
+                continue                      # already reported as missing
+            if not callable(fn):
+                problems.append(f"    {dotted} is not callable "
+                                f"({type(fn).__name__})")
+                continue
+            try:
+                sig = inspect.signature(fn)
+            except (TypeError, ValueError):    # builtins, C functions
+                continue
+            if any(p.kind is inspect.Parameter.VAR_KEYWORD
+                   for p in sig.parameters.values()):
+                continue                       # **kwargs absorbs anything
+            absent = [a for a in params if a not in sig.parameters]
+            if absent:
+                problems.append(
+                    f"    {dotted} has an older signature: it does not accept "
+                    f"{', '.join(absent)}")
+
         if mod_name == "tca.pipeline" and hasattr(mod, "CleanReport"):
             have = {f.name for f in dataclasses.fields(mod.CleanReport)}
             gone = [f for f in REQUIRED_REPORT_FIELDS if f not in have]
@@ -101,7 +150,7 @@ def check_environment() -> None:
     if not problems:
         return
     raise VersionSkewError(
-        "This folder is half-copied: tier5/ and tca/ are not the same release."
+        "This folder is half-copied: its parts are not the same release."
         "\n\n" + "\n".join(problems)
         + "\n\n  Loaded from:\n" + "\n".join(paths)
         + "\n" + _FIX)
@@ -121,3 +170,22 @@ def check_report(report) -> None:
         "This folder is half-copied: tier5/ is newer than tca/.\n\n"
         f"    tca.pipeline.CleanReport is missing: {', '.join(missing)}\n"
         + _FIX)
+
+
+def _main() -> int:
+    """`python -m tier5.compat` -- a pre-flight for a folder that was just
+    copied, so a bad copy costs a second instead of a fit."""
+    try:
+        check_environment()
+    except VersionSkewError as exc:
+        print(exc)
+        return 1
+    print("OK -- config.py, tca/ and tier5/ are the same release.")
+    for mod_name in REQUIRED_SURFACE:
+        mod = importlib.import_module(mod_name)
+        print(f"    {mod_name:<14} {getattr(mod, '__file__', '?')}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
