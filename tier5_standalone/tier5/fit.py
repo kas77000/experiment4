@@ -137,6 +137,9 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
 
 
 def main():
+    # Before argparse, before the CSV is read: a half-copied folder must
+    # fail in under a second, not after loading 47k rows.
+    compat.check_environment()
     ap = dataset.add_common_args(argparse.ArgumentParser())
     ap.add_argument("--metric", choices=[schema.SLIPPAGE_BPS,
                                          schema.PERF_IN_SPREADS,

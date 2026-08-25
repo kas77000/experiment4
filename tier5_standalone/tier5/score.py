@@ -181,6 +181,9 @@ def score_frame(df, base_cfg, *, bands_dir: str, out_dir: str,
 
 
 def main():
+    # Before argparse, before the CSV is read: a half-copied folder must
+    # fail in under a second, not after loading 47k rows.
+    compat.check_environment()
     ap = dataset.add_common_args(argparse.ArgumentParser())
     ap.add_argument("--bands-dir", default="bands",
                     help="Where to look up frozen bands.")

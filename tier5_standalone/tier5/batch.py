@@ -101,6 +101,7 @@ def summary_frame(results: list[dict], mode: str) -> pd.DataFrame:
 
 
 def main():
+    compat.check_environment()
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["fit", "score"])
     ap.add_argument("--dir", required=True, help="Directory of CSV extracts.")
