@@ -20,7 +20,8 @@ import numpy as np
 
 import config
 from tca import dataset, report, schema
-from tier5 import band, cells, config as t5cfg, curve, normality, persist
+from tier5 import (band, budget, cells, config as t5cfg, curve, normality,
+                   persist)
 
 
 def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
@@ -33,6 +34,17 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
             f"target_flag_rate must be a percentage strictly between 0 and 100, "
             f"got {cfg.target_flag_rate!r}. It is the share of the fit book you "
             f"are willing to review.")
+    if cfg.target_review_count is not None and cfg.target_review_count <= 0:
+        raise ValueError(
+            f"target_review_count must be a positive number of orders per cell "
+            f"per month, got {cfg.target_review_count!r}.")
+    if cfg.target_review_count is not None and cfg.target_flag_rate is not None:
+        # Both set the same bound from different directions. Picking one
+        # silently would make the band depend on which branch ran first.
+        raise ValueError(
+            "target_review_count and target_flag_rate both choose k, so only "
+            "one may be set. A count is a workload the desk can staff; a rate "
+            "is a share of the book. Pick the one you can defend.")
 
     results = []
     for region, strategy, g in cells.cells(df):
@@ -48,7 +60,7 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
                "lo": lo, "hi": hi, "k_used": cfg.k_sigma,
                "flag_rate_pct": float("nan"),
                "band_path": None, "skipped": False, "reason": "",
-               "curve_msg": ""}
+               "curve_msg": "", "budget": None}
 
         if est["n"] == 0:
             # Distinct from "too few orders": the cell has rows, they just
@@ -73,7 +85,18 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
         # unchanged -- only how many scales out the bound sits moves, so this
         # is still mu +/- k*sigma and not a different method wearing its name.
         cell_cfg = cfg
-        if cfg.target_flag_rate is not None:
+        if cfg.target_review_count is not None:
+            d_lo, d_hi = cells.date_range(g)
+            sol = budget.solve(x, est[f"centre_{e}"], est[f"scale_{e}"],
+                               per_month=cfg.target_review_count,
+                               months=budget.window_months(d_lo, d_hi),
+                               k_floor=cfg.k_sigma)
+            row["budget"] = sol
+            cell_cfg = dataclasses.replace(cfg, k_sigma=float(sol["k"]))
+            est = band.estimates(x, float(sol["k"]))
+            lo, hi = est[f"lo_{e}"], est[f"hi_{e}"]
+            row["lo"], row["hi"], row["k_used"] = lo, hi, float(sol["k"])
+        elif cfg.target_flag_rate is not None:
             k = normality.required_k(
                 x, est[f"centre_{e}"], est[f"scale_{e}"],
                 target_outside=cfg.target_flag_rate / 100.0)["k_symmetric"]
@@ -91,7 +114,7 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
         path = cells.band_path(bands_dir, region, strategy)
         persist.save(est, cell_cfg, path, region=region, strategy=strategy,
                      source_csv=source_csv, period=period, df=g,
-                     flag_rate_pct=flag_rate)
+                     flag_rate_pct=flag_rate, budget=row["budget"])
         row["band_path"] = path
 
         cell_out = cells.out_dir(out_dir, "fit", period, region, strategy)
@@ -122,6 +145,13 @@ def main():
                          "Overrides --k: each cell solves for the k that "
                          "delivers this. Use when k=3 flags more than the desk "
                          "can review, which on a fat-tailed book it will.")
+    ap.add_argument("--target-review-count", type=float, default=None,
+                    metavar="N",
+                    help="Orders per cell per MONTH you are willing to "
+                         "explain. Overrides --k: each cell solves for the k "
+                         "that delivers this load from its own volume. Use "
+                         "this when the answer is 'a couple a month' rather "
+                         "than a percentage. --k becomes a floor.")
     ap.add_argument("--estimator", choices=list(t5cfg.ESTIMATORS),
                     help="Which estimator cuts the band.")
     ap.add_argument("--bands-dir", default="bands",
@@ -142,6 +172,8 @@ def main():
         overrides["estimator"] = args.estimator
     if args.target_flag_rate is not None:
         overrides["target_flag_rate"] = args.target_flag_rate
+    if args.target_review_count is not None:
+        overrides["target_review_count"] = args.target_review_count
     if overrides:
         cfg = dataclasses.replace(cfg, **overrides)
 
@@ -151,8 +183,13 @@ def main():
     print("\n=== Cleaning ===")
     print(clean_report.as_text())
     units = t5cfg.units_of(cfg.metric)
-    k_desc = (f"k=solved per cell for {cfg.target_flag_rate:g}% outside"
-              if cfg.target_flag_rate is not None else f"k={cfg.k_sigma:g}")
+    if cfg.target_review_count is not None:
+        k_desc = (f"k=solved per cell for {cfg.target_review_count:g} "
+                  f"order(s)/month  (floor k={cfg.k_sigma:g})")
+    elif cfg.target_flag_rate is not None:
+        k_desc = f"k=solved per cell for {cfg.target_flag_rate:g}% outside"
+    else:
+        k_desc = f"k={cfg.k_sigma:g}"
     print(f"\n  metric={cfg.metric} ({units})  {k_desc}"
           f"  estimator={cfg.estimator}  min_group_n={cfg.min_group_n}")
 
@@ -180,7 +217,24 @@ def main():
         print(f"    scale   {r['scale']:>9.2f}")
         print(f"    RANGE   {r['lo']:>9.2f} .. {r['hi']:.2f} {units}"
               f"      <- frozen to {r['band_path']}")
-        if cfg.target_flag_rate is not None:
+        if cfg.target_review_count is not None:
+            b = r["budget"] or {}
+            print(f"    k       {r['k_used']:>9.2f}"
+                  + ("      <- HELD AT THE FLOOR" if b.get("floored")
+                     else f"      <- what {cfg.target_review_count:g}/month "
+                          f"cost on this cell"))
+            miss = budget.miss_to_flag(r["lo"], r["hi"], r["centre"])
+            print(f"    an order must miss by {miss:.1f} {units} to be flagged")
+            if b.get("floored"):
+                print(f"    NOTE: {b.get('reason', '')}")
+            else:
+                print(f"    cut on the {b.get('n_tail', 0)} most extreme "
+                      f"order(s) of the fit book")
+                if b.get("thin_tail"):
+                    print(f"    THIN TAIL: {b.get('n_tail', 0)} order(s) is "
+                          f"few to place a bound on. Fit a longer window, or "
+                          f"raise the budget.")
+        elif cfg.target_flag_rate is not None:
             print(f"    k       {r['k_used']:>9.2f}"
                   f"      <- what {cfg.target_flag_rate:g}% cost on this cell")
         print(f"    in-sample flagged: {r['flag_rate_pct']:.2f}%")
@@ -191,7 +245,18 @@ def main():
     n_skip = len(results) - n_ok
     print(f"\nFroze {n_ok} band(s) to {args.bands_dir}/"
           + (f", skipped {n_skip}." if n_skip else "."))
-    if cfg.target_flag_rate is not None:
+    if cfg.target_review_count is not None:
+        n = cfg.target_review_count
+        print(f"\n  k was calibrated to {n:g} order(s) per cell per month, so the "
+              f"in-sample")
+        print("  rates above hold BY CONSTRUCTION and measure nothing. That is the")
+        print("  point: a review load is a staffing decision, not a finding. The")
+        print("  number that carries information is what tier5.score reports on a")
+        print(f"  period the band has never seen -- a month with {3 * n:.0f}+ is a "
+              f"real")
+        print("  change, and a run of empty months means the budget was set too")
+        print("  tight to detect anything.")
+    elif cfg.target_flag_rate is not None:
         print(f"\n  k was calibrated, so the in-sample rates above equal "
               f"{cfg.target_flag_rate:g}% BY")
         print("  CONSTRUCTION and measure nothing. That is fine -- the rate is a")

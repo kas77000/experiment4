@@ -188,6 +188,7 @@ caption and still counted in every number.
 |---|---|---|
 | `--csv PATH` | — | The extract. Omit for a synthetic demo book. |
 | `--k` | `3.0` | Scales either side of the centre. |
+| `--target-review-count N` | off | Solve for `k` per cell so about `N` orders **per month** fall outside. Overrides `--k`, which becomes a floor. Say it in orders when the answer is "a couple a month". |
 | `--target-flag-rate PCT` | off | Solve for `k` per cell so exactly `PCT`% of the fit book falls outside. Overrides `--k`. |
 | `--metric` | `perf_in_spreads` | Also `slippage_bps` (bps), `perf_norm` (sigma). |
 | `--estimator` | `classical` | `classical` = mean ± k·sd. `robust` = median ± k·1.4826·MAD. |
@@ -232,8 +233,72 @@ resourcing decision, not a statistical one.
 **Keep `k = 3` and accept the real rate.** The number is textbook and needs no
 defending. You just cannot also claim it flags 0.27%.
 
-**State the rate you want and report the `k` it took.** `--target-flag-rate`
-solves for `k` per cell:
+**State the load you want and report the `k` it took.** Two flags do this, and
+the difference between them matters more than it looks.
+
+#### `--target-review-count N` — say it in orders (recommended)
+
+The question a desk head actually asks is *"how many of these will land on my
+team each month?"* — a number of orders, not a percentage. This flag takes that
+number directly, per cell, per month:
+
+```bash
+python -m tier5.fit --csv year.csv --target-review-count 2
+```
+
+Each cell converts your budget into its own rate using its own volume and its
+own fit window —
+
+```
+rate = orders_per_month × months_in_fit_window ÷ n
+```
+
+— then solves for the `k` that delivers it. On the 47k HK VWAP book, `2` gives:
+
+```
+RANGE      -14.37 .. 13.66 spreads
+k            5.26      <- what 2/month cost on this cell
+an order must miss by 14.0 spreads to be flagged
+cut on the 24 most extreme order(s) of the fit book
+in-sample flagged: 0.05%
+```
+
+That is **99.95% coverage** — almost every order inside — with roughly two a
+month to explain. Simulating 600 fresh months against that frozen band: mean
+2.0 a month, 90% of months between 0 and 5, 16% of months completely clean.
+
+**Why a count and not a rate.** A rate is only a workload once you know the
+volume. `0.5%` is twenty orders a month on a 47k book and one a quarter on a
+thin one, so a single rate across twelve cells hands the busy desks all the
+work. A count gives every desk the same load, which is what "we can explain two
+a month" actually means.
+
+**Two guards, both load-bearing:**
+
+- **`--k` becomes a floor.** On a thin cell the budget can imply a rate *wider*
+  than nominal — 2 a month out of 400 orders a year is 6% — which would give the
+  small desk a **tighter** band than the large one, exactly backwards. The
+  budget may only ever widen a band. When the floor catches a cell it says so:
+  `k  3.00  <- HELD AT THE FLOOR`, with the reason.
+- **Tail evidence is reported.** A bound at the 99.95th percentile is cut on the
+  handful of orders beyond it. `cut on the 24 most extreme order(s)` is enough
+  to freeze; below ten the fit prints `THIN TAIL` and tells you to fit a longer
+  window or raise the budget.
+
+The band file records the whole derivation, so `k = 5.26` is never somebody's
+guess six months from now:
+
+```json
+"k_sigma": 5.26, "k_source": "target_review_count", "target_review_count": 2.0,
+"review_budget": {"rate": 0.000511, "n_tail": 24, "floored": false,
+                  "thin_tail": false}
+```
+
+#### `--target-flag-rate PCT` — say it as a share of the book
+
+Use this when the standard genuinely is a percentage, or when the cells are
+similar enough in volume that a rate and a count say the same thing. It
+solves for `k` per cell the same way:
 
 ```bash
 python -m tier5.fit --csv year.csv --target-flag-rate 0.5
@@ -255,10 +320,13 @@ dense inner tail, not the genuinely extreme ones.
 What is **not** honest is calling a band "3 sigma" while its tails mean
 something entirely different from what that phrase implies.
 
+The two flags are mutually exclusive — setting both is refused rather than
+silently resolved, because they choose the same bound from different directions.
+
 ### The catch with per-cell `k`
 
-`--target-flag-rate` gives every cell the same share of the queue, which means a
-cell with fatter tails gets a wider band. Read that twice: **a region with
+Both flags give every cell the same *load*, which means a cell with fatter tails
+gets a wider band. Read that twice: **a region with
 genuinely worse execution is handed a more forgiving bound.** That is right if
 you are allocating scarce review capacity evenly, and wrong if you want one
 absolute standard across regions. If you want the latter, fit once with

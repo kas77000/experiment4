@@ -69,7 +69,7 @@ def _reference(df: pd.DataFrame, cfg, est: dict, flag_rate_pct: float) -> dict:
 
 def save(est: dict, cfg, path: str, *, region: str, strategy: str,
          source_csv: str, period: str | None, df: pd.DataFrame,
-         flag_rate_pct: float) -> str:
+         flag_rate_pct: float, budget: dict | None = None) -> str:
     """Write one frozen band to JSON."""
     e = cfg.estimator
     d_lo, d_hi = cells.date_range(df)
@@ -92,10 +92,19 @@ def save(est: dict, cfg, path: str, *, region: str, strategy: str,
         # How k was arrived at. A band at k = 5.9 must not read as somebody's
         # arbitrary guess six months from now: either it is the config default
         # or it is the k that delivered a stated review load on this cell.
-        "k_source": ("target_flag_rate" if cfg.target_flag_rate is not None
-                     else "fixed"),
+        "k_source": ("target_review_count"
+                     if getattr(cfg, "target_review_count", None) is not None
+                     else "target_flag_rate"
+                     if cfg.target_flag_rate is not None else "fixed"),
         "target_flag_rate": (float(cfg.target_flag_rate)
                              if cfg.target_flag_rate is not None else None),
+        "target_review_count": (float(cfg.target_review_count)
+                                if getattr(cfg, "target_review_count", None)
+                                is not None else None),
+        # What the budget actually cost on THIS cell: the rate it implied, how
+        # many fit-book orders sit beyond the bound, and whether the floor had
+        # to catch it. Without this a k of 5.29 is unreproducible.
+        "review_budget": budget,
         "n": int(est["n"]),
         # the pair that scores
         "centre": _f(est[f"centre_{e}"]), "scale": _f(est[f"scale_{e}"]),
