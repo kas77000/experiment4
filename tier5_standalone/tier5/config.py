@@ -58,20 +58,47 @@ LEVEL_KEYS = {
 #   tails and therefore sits nearer P99.75. The two read identically in a
 #   meeting and differ by a real amount on the page.
 #
-# WHICH TERM ACTUALLY BINDS. On a book shaped like the real HK VWAP one:
+# WHY K_SIGMA IS NINE AND NOT THREE OR FOUR.
 #
-#     mean + 4*sigma =  10.54        P99.5  =   8.30    -> hi = 10.54 (sigma)
-#     mean - 4*sigma = -12.14        P0.5   = -11.65    -> lo = -12.14 (sigma)
+# Under a normal distribution 4 sigma covers 99.994% -- about three orders a
+# YEAR on a 47k book -- which is why "four sigma" sounds like "everything".
+# The real HK VWAP book is not normal, and not by a little:
 #
-# So at K_SIGMA = 4 the sigma term wins on both sides and the percentile never
-# fires. That is not a fault -- it is what the MAX is for -- but it does mean
-# the shipped rule is effectively "mean +/- 4 sigma" on this book, with the
-# percentile standing by in case a cell's tail is heavy enough to need it.
-# Lower K_SIGMA and the percentile starts binding; raise it and it never will.
-# Every fit prints both candidates and which one won, per side, so this is
-# never something to guess at.
-K_SIGMA = 4.0
+#     K_SIGMA   band (spreads)     coverage    to review
+#        3      -8.26 ..  7.76      97.60%     94 / month
+#        4     -10.93 .. 10.43      98.66%     52 / month     <- 213x a normal book
+#        5     -13.60 .. 13.10      99.33%     26 / month
+#        6     -16.27 .. 15.77      99.73%     11 / month
+#        7     -18.94 .. 18.44      99.88%      4.6 / month
+#        8     -21.61 .. 21.11      99.95%      2.1 / month
+#        9     -24.28 .. 23.78      99.98%      0.8 / month    <- set
+#
+# At k = 4 this book leaves 1.34% outside where a normal leaves 0.006%. The
+# multiple that means "essentially everything" HERE is nine, and the reason is
+# visible in any curve.png: the observed density peaks around 0.44 against the
+# fitted normal's 0.15, so sigma is simultaneously too large for the middle of
+# the book and too small for its tails. A sigma multiple calibrated on a
+# Gaussian intuition does not survive that shape.
+#
+# ONE CONSEQUENCE WORTH KNOWING. At K_SIGMA = 9 the sigma term (+/-24) is far
+# wider than P99.5 (+/-11.7), so the percentile can never win the MAX and the
+# rule is in practice a pure 9-sigma band. The percentile stays as a dormant
+# net: it fires only if some cell's tail is so heavy that its own P99.5 lands
+# beyond nine sigma. Every fit prints both candidates and the winner per side,
+# so whether the net ever fires is a fact on the page, not an assumption.
+K_SIGMA = 9.0
 PERCENTILE_PCT = 99.5
+
+# The floor for the OPT-IN overrides only, and deliberately not K_SIGMA.
+#
+# k_sigma used to serve both jobs -- the shipped band width and the floor under
+# an explicit --target-review-count -- which was harmless while it was 4 and
+# actively wrong at 9: a desk asking for two orders a month would have been
+# floored to a nine-sigma band and got nothing, with the flag appearing to work.
+# An explicit override is a deliberate instruction and must deliver what it
+# says; this floor exists only to stop a thin cell talking itself into a band
+# NARROWER than a conventional one.
+BUDGET_K_FLOOR = 3.0
 
 # classical -> mean / standard deviation   (the method as requested)
 # robust    -> median / 1.4826 * MAD       (the same band, tail-resistant)

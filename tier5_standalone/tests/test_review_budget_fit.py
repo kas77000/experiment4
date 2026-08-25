@@ -95,13 +95,14 @@ class TestGuards:
         # 600 orders a year cannot supply 24 a year without a 4% flag rate.
         r = _fit(_extract(n=600), tmp_path,
                  target_review_count=2, min_group_n=100)[0]
-        assert r["k_used"] == t5cfg.K_SIGMA
+        assert r["k_used"] == t5cfg.BUDGET_K_FLOOR
         assert r["budget"]["floored"]
 
     def test_the_floor_never_narrows_the_band(self, tmp_path):
         df = _extract(n=600)
         plain = _fit(df, tmp_path, target_review_count=None,
-                     target_flag_rate=None, min_group_n=100)[0]
+                     target_flag_rate=None, min_group_n=100,
+                     k_sigma=t5cfg.BUDGET_K_FLOOR)[0]
         held = _fit(df, tmp_path, target_review_count=2, min_group_n=100)[0]
         assert held["hi"] == pytest.approx(plain["hi"])
 

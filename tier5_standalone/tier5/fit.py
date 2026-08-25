@@ -98,7 +98,7 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
             sol = budget.solve(x, est[f"centre_{e}"], est[f"scale_{e}"],
                                per_month=cfg.target_review_count,
                                months=budget.window_months(d_lo, d_hi),
-                               k_floor=cfg.k_sigma)
+                               k_floor=t5cfg.BUDGET_K_FLOOR)
             row["budget"] = sol
             cell_cfg = dataclasses.replace(cfg, k_sigma=float(sol["k"]))
             est = band.estimates(x, float(sol["k"]))
@@ -122,9 +122,13 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
                 # floor here, not a fixed multiple -- a near-normal cell must
                 # not end up with a tighter band than a fat-tailed one just
                 # because its own tail happens to be thin.
+                # No floor here. An explicit coverage target is an
+                # instruction, and flooring it at the shipped band width would
+                # make --target-flag-rate silently inert the moment K_SIGMA
+                # moved above the k that target implies.
                 row["k_from_coverage"] = float(k_cov)
-                k = max(float(k_cov), float(cfg.k_sigma))
-                row["k_floored"] = k > k_cov
+                k = float(k_cov)
+                row["k_floored"] = False
                 cell_cfg = dataclasses.replace(cfg, k_sigma=float(k))
                 est = band.estimates(x, float(k))
                 lo, hi = est[f"lo_{e}"], est[f"hi_{e}"]
@@ -228,7 +232,7 @@ def main():
     units = t5cfg.units_of(cfg.metric)
     if cfg.target_review_count is not None:
         k_desc = (f"k=solved per cell for {cfg.target_review_count:g} "
-                  f"order(s)/month  (floor k={cfg.k_sigma:g})")
+                  f"order(s)/month  (floor k={t5cfg.BUDGET_K_FLOOR:g})")
         if cfg.target_flag_rate is not None:
             print(f"\n  NOTE: a review count was given, so it overrides the "
                   f"{100.0 - cfg.target_flag_rate:g}% coverage")
