@@ -29,6 +29,45 @@ LEVEL_KEYS = {
     LEVEL_ALGO_ADV: (schema.ALGO, schema.ADV_BUCKET),
 }
 
+# --- THE STANDARD --------------------------------------------------------
+# The share of orders a band is meant to contain. This is the ONE number the
+# whole workflow turns on, and it is set here rather than passed on the command
+# line so that every run, every region, every strategy and every refit applies
+# the same rule without anybody having to remember a flag.
+#
+# Read it as the sentence you would say out loud: "our threshold is the 99.9th
+# percentile of the last year's execution." That sentence is defensible in a
+# way "k = 4.97" is not, and it does not change when the book does.
+#
+# WHY A COVERAGE AND NOT A SIGMA MULTIPLE. They are the same statement only
+# under a normal distribution -- "3 sigma" and "99.73% coverage" are two ways
+# of saying one thing, and 99.9% is 3.29 sigma. Execution books are not normal,
+# so the two come apart, and only one of them survives the split:
+#
+#   fix the MULTIPLE at 3.0 -> the coverage floats. On a real HK VWAP book it
+#                              lands at 97.6%, and the threshold silently means
+#                              something different in every cell.
+#   fix the COVERAGE at 99.9% -> the multiple floats. It came out at 4.97 on
+#                              that book and 3.29 if the book had been normal.
+#                              The rule holds; k reports what it cost.
+#
+# The second is the systematic one, because the promise is what you defend and
+# the multiple is only ever the means. k is now an OUTPUT of every fit, printed
+# beside the k a normal book would have needed -- and the gap between those two
+# numbers is this book's non-normality, in one figure.
+#
+# What it costs, on a 47k-order HK VWAP book (sd 2.67 spreads):
+#
+#     coverage    k if normal    k here    band (spreads)    to review
+#      99.00%        2.58         3.61     -9.98 ..  9.27     39/month
+#      99.73%        3.00         4.44    -12.19 .. 11.47     11/month
+#      99.90%        3.29         4.97    -13.59 .. 12.87      4/month   <- set
+#      99.95%        3.48         5.27    -14.40 .. 13.68      2/month
+#
+# Change THIS ONE NUMBER to move the whole desk. Nothing else needs editing,
+# and no command line changes.
+COVERAGE_PCT = 99.9
+
 # classical -> mean / standard deviation   (the method as requested)
 # robust    -> median / 1.4826 * MAD       (the same band, tail-resistant)
 ESTIMATORS = ("classical", "robust")
@@ -73,7 +112,7 @@ class Tier5Config:
     # Note the fit-book rate then equals the target BY CONSTRUCTION, so it
     # measures nothing. The out-of-sample number from tier5.score is still a
     # measurement, and is the one that carries information.
-    target_flag_rate: float | None = None
+    target_flag_rate: float | None = round(100.0 - COVERAGE_PCT, 10)
 
     # --- or: pick the review load in ORDERS and let each cell supply its own
     # k. Orders per cell per MONTH. When set, both k_sigma and

@@ -19,6 +19,7 @@ without matplotlib the plot is skipped. Both skips are reported.
 from __future__ import annotations
 
 import math
+import statistics
 
 import numpy as np
 import pandas as pd
@@ -40,6 +41,23 @@ def _finite(x) -> np.ndarray:
 def promised_inside(k: float) -> float:
     """P(|Z| <= k) for a standard normal, in closed form."""
     return math.erf(k / math.sqrt(2.0))
+
+
+def k_if_normal(coverage_pct: float) -> float:
+    """The k that would deliver `coverage_pct` IF the book were normal.
+
+    Printed beside the k the book actually needed. The gap between the two is
+    the non-normality expressed as a single number, which is the most direct
+    answer available to "why isn't it 3?": 99.9% coverage is 3.29 sigma on
+    paper and 4.97 on a real HK VWAP book, and the difference is the tail.
+
+    statistics.NormalDist rather than scipy: this runs on every fit, and scipy
+    is optional everywhere else in this module.
+    """
+    rate = (100.0 - float(coverage_pct)) / 100.0
+    if not (0.0 < rate < 1.0):
+        return float("nan")
+    return float(statistics.NormalDist().inv_cdf(1.0 - rate / 2.0))
 
 
 def coverage_table(x, centre: float, scale: float,

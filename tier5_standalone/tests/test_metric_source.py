@@ -269,13 +269,18 @@ def _extract(path, strategy, n, seed, start="2025-06-02"):
     return path
 
 
-def _run_fit(tmp_path, csv):
+def _run_fit(tmp_path, csv, k=None):
+    """`k` pins the multiple. These tests are about which COLUMN the band came
+    from and what UNITS it is in, so they must not also depend on the coverage
+    standard in tier5/config.py -- that would make an unrelated policy change
+    read as a units bug."""
     import sys
     from tier5 import fit
     argv = sys.argv
     sys.argv = ["fit", "--csv", csv,
                 "--bands-dir", str(tmp_path / "bands"),
-                "--out-dir", str(tmp_path / "outputs")]
+                "--out-dir", str(tmp_path / "outputs")] + (
+                    ["--k", str(k)] if k is not None else [])
     try:
         fit.main()
     finally:
@@ -403,7 +408,7 @@ def test_band_bounds_equal_mean_plus_k_sd_of_the_raw_spread_column(tmp_path):
     """
     import json
     csv = _extract(str(tmp_path / "year.csv"), "VWAP", 900, 41)
-    _run_fit(tmp_path, csv)
+    _run_fit(tmp_path, csv, k=3.0)
 
     x = pd.read_csv(csv)["ePvwap/Sprd"]
     expected_lo = x.mean() - 3.0 * x.std(ddof=1)

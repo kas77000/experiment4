@@ -1,0 +1,132 @@
+"""The coverage standard: one number in config.py, no flags, every run.
+
+The point of moving the rule out of the command line is that it stops being
+something anybody can forget. These tests pin the rule itself and, more
+importantly, the two traps a standing default creates -- a flag that appears
+to work but is silently overruled, and a guard that fires on every run.
+"""
+from __future__ import annotations
+
+import dataclasses
+import json
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from tca import pipeline
+from tier5 import config as t5cfg, fit, normality
+
+
+def _extract(n=24_000, seed=4):
+    rng = np.random.default_rng(seed)
+    heavy = rng.random(n) >= 0.64
+    sp = -0.38 + rng.normal(0.0, np.where(heavy, 4.38, 0.63))
+    sprd = rng.uniform(4.0, 12.0, n)
+    return pd.DataFrame({
+        "aggrTgtId": np.arange(n),
+        "Sym": [f"{i % 300:04d}.HK" for i in range(n)],
+        "Date": rng.choice(pd.bdate_range("2025-06-02", periods=261), n),
+        "Side": rng.choice(["BUY", "SELL"], n), "Strategy": "VWAP",
+        "Sprd": sprd, "Pvwap": (sp + 0.6) * sprd, "ePvwap/Sprd": sp,
+        "$Mln": rng.lognormal(1.0, 1.2, n)})
+
+
+def _fit(tmp_path, df=None, **over):
+    import config as appcfg
+    df = _extract() if df is None else df
+    prep, _ = pipeline.prepare(df, appcfg.COLUMN_MAP, appcfg.DATA,
+                               appcfg.SLIPPAGE_SIGN,
+                               pre_transform=appcfg.PRE_TRANSFORM)
+    cfg = dataclasses.replace(t5cfg.CONFIG, **over)
+    return fit.fit_frame(prep, cfg, bands_dir=str(tmp_path / "bands"),
+                         out_dir=str(tmp_path / "out"), source_csv="t.csv")[0]
+
+
+class TestTheStandardIsTheDefault:
+    def test_config_states_a_coverage_not_a_flag_rate(self):
+        assert t5cfg.COVERAGE_PCT == 99.9
+
+    def test_the_default_config_already_solves_for_it(self):
+        """No flag, no argument: a bare fit applies the standard."""
+        assert t5cfg.CONFIG.target_flag_rate == pytest.approx(0.1)
+
+    def test_a_bare_fit_delivers_the_stated_coverage(self, tmp_path):
+        r = _fit(tmp_path)
+        assert r["flag_rate_pct"] == pytest.approx(0.1, abs=0.02)
+
+    def test_a_bare_fit_does_not_use_k_three(self, tmp_path):
+        """The whole point: on a fat book 99.9% costs far more than 3."""
+        r = _fit(tmp_path)
+        assert r["k_used"] > 4.0
+
+    def test_it_is_still_centre_plus_k_scale(self, tmp_path):
+        r = _fit(tmp_path)
+        assert r["hi"] == pytest.approx(r["centre"] + r["k_used"] * r["scale"])
+
+    def test_changing_the_one_constant_moves_the_band(self, tmp_path):
+        tight = _fit(tmp_path, target_flag_rate=100.0 - 99.0)
+        wide = _fit(tmp_path, target_flag_rate=100.0 - 99.95)
+        assert wide["hi"] > tight["hi"]
+        assert wide["lo"] < tight["lo"]
+
+
+class TestKIfNormal:
+    @pytest.mark.parametrize("cov,k", [(99.0, 2.576), (99.73, 3.0),
+                                       (99.9, 3.291), (99.95, 3.481)])
+    def test_the_textbook_values(self, cov, k):
+        assert normality.k_if_normal(cov) == pytest.approx(k, abs=0.005)
+
+    def test_three_sigma_really_is_99_73_percent(self):
+        """The identity the whole reframing rests on."""
+        assert normality.k_if_normal(99.73) == pytest.approx(3.0, abs=0.005)
+
+    def test_a_nonsense_coverage_is_nan(self):
+        assert np.isnan(normality.k_if_normal(100.0))
+        assert np.isnan(normality.k_if_normal(0.0))
+
+
+class TestTheTrapsAStandingDefaultCreates:
+    """Both of these were live bugs the moment the default was switched on."""
+
+    def test_explicit_k_is_not_silently_overruled(self, tmp_path, monkeypatch,
+                                                  capsys):
+        import sys
+        csv = tmp_path / "o.csv"
+        _extract(n=3000).to_csv(csv, index=False)
+        monkeypatch.setattr(sys, "argv",
+                            ["fit", "--csv", str(csv), "--k", "3",
+                             "--bands-dir", str(tmp_path / "b"),
+                             "--out-dir", str(tmp_path / "o")])
+        fit.main()
+        saved = json.loads((tmp_path / "b" / "HK" / "VWAP.json").read_text())
+        assert saved["k_sigma"] == 3.0, "--k lost to the config default"
+        assert saved["k_source"] == "fixed"
+
+    def test_target_review_count_does_not_trip_the_exclusivity_guard(
+            self, tmp_path, monkeypatch):
+        import sys
+        csv = tmp_path / "o.csv"
+        _extract(n=24_000).to_csv(csv, index=False)
+        monkeypatch.setattr(sys, "argv",
+                            ["fit", "--csv", str(csv),
+                             "--target-review-count", "2",
+                             "--bands-dir", str(tmp_path / "b"),
+                             "--out-dir", str(tmp_path / "o")])
+        fit.main()          # must not raise
+        saved = json.loads((tmp_path / "b" / "HK" / "VWAP.json").read_text())
+        assert saved["k_source"] == "target_review_count"
+
+
+class TestProvenance:
+    def test_the_band_records_the_standard_it_was_cut_to(self, tmp_path):
+        r = _fit(tmp_path)
+        saved = json.loads(open(r["band_path"]).read())
+        assert saved["coverage_pct"] == pytest.approx(99.9)
+        assert saved["k_if_normal"] == pytest.approx(3.291, abs=0.005)
+        assert saved["k_sigma"] == pytest.approx(r["k_used"])
+
+    def test_the_gap_between_the_two_ks_is_the_non_normality(self, tmp_path):
+        r = _fit(tmp_path)
+        saved = json.loads(open(r["band_path"]).read())
+        assert saved["k_sigma"] > saved["k_if_normal"], "fat tail should cost more"

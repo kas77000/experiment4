@@ -41,6 +41,10 @@ def _prepared(df):
 
 
 def _fit(df, tmp_path, **over):
+    # A review count overrides the coverage standard that CONFIG now carries;
+    # spell that out here so each test states one rule, not two.
+    if over.get("target_review_count") is not None:
+        over.setdefault("target_flag_rate", None)   # the CLI does this too
     cfg = dataclasses.replace(t5cfg.CONFIG, **over)
     return fit.fit_frame(_prepared(df), cfg,
                          bands_dir=str(tmp_path / "bands"),
@@ -94,14 +98,18 @@ class TestGuards:
 
     def test_the_floor_never_narrows_the_band(self, tmp_path):
         df = _extract(n=600)
-        plain = _fit(df, tmp_path, target_review_count=None, min_group_n=100)[0]
+        plain = _fit(df, tmp_path, target_review_count=None,
+                     target_flag_rate=None, min_group_n=100)[0]
         held = _fit(df, tmp_path, target_review_count=2, min_group_n=100)[0]
         assert held["hi"] == pytest.approx(plain["hi"])
 
-    def test_both_targets_at_once_is_refused(self, tmp_path):
-        with pytest.raises(ValueError, match=r"only\s+one may be set"):
-            _fit(_extract(n=3000), tmp_path,
-                 target_review_count=2, target_flag_rate=1.0)
+    def test_a_count_overrides_the_coverage_standard(self, tmp_path):
+        """Most specific wins, and it is not silent -- main() prints a NOTE."""
+        r = _fit(_extract(), tmp_path,
+                 target_review_count=2, target_flag_rate=1.0)[0]
+        assert r["budget"] is not None, "the count was ignored"
+        per_month = r["flag_rate_pct"] / 100.0 * r["n"] / 12.0
+        assert per_month == pytest.approx(2.0, abs=1.0)
 
     def test_a_negative_budget_is_refused(self, tmp_path):
         with pytest.raises(ValueError, match="positive"):
@@ -118,7 +126,7 @@ class TestProvenance:
         assert saved["k_sigma"] == pytest.approx(r["k_used"])
 
     def test_a_plain_fit_still_says_fixed(self, tmp_path):
-        r = _fit(_extract(n=3000), tmp_path)[0]
+        r = _fit(_extract(n=3000), tmp_path, target_flag_rate=None)[0]
         saved = json.loads(open(r["band_path"]).read())
         assert saved["k_source"] == "fixed"
         assert saved["target_review_count"] is None

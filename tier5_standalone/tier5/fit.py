@@ -38,13 +38,6 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
         raise ValueError(
             f"target_review_count must be a positive number of orders per cell "
             f"per month, got {cfg.target_review_count!r}.")
-    if cfg.target_review_count is not None and cfg.target_flag_rate is not None:
-        # Both set the same bound from different directions. Picking one
-        # silently would make the band depend on which branch ran first.
-        raise ValueError(
-            "target_review_count and target_flag_rate both choose k, so only "
-            "one may be set. A count is a workload the desk can staff; a rate "
-            "is a share of the book. Pick the one you can defend.")
 
     results = []
     for region, strategy, g in cells.cells(df):
@@ -84,6 +77,17 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
         # Calibrate k to the wanted review load. The centre and the scale are
         # unchanged -- only how many scales out the bound sits moves, so this
         # is still mu +/- k*sigma and not a different method wearing its name.
+        #
+        # PRECEDENCE, most specific first:
+        #   target_review_count  -- a workload, in orders per cell per month
+        #   target_flag_rate     -- a coverage standard, from COVERAGE_PCT
+        #   k_sigma              -- a fixed multiple
+        # This used to raise when the first two were both set, which was right
+        # while both were opt-in and wrong the moment coverage became the
+        # standing default in config.py: every single --target-review-count run
+        # would have collided with it. An explicit count is a deliberate
+        # override of the standard, and main() says so out loud rather than
+        # resolving it in silence.
         cell_cfg = cfg
         if cfg.target_review_count is not None:
             d_lo, d_hi = cells.date_range(g)
@@ -167,13 +171,21 @@ def main():
     if args.metric:
         overrides["metric"] = args.metric
     if args.k is not None:
+        # An explicit --k means "this multiple, fixed" -- so it must switch the
+        # coverage standard OFF, not silently lose to it. Without this line the
+        # default in config.py would solve for k anyway and --k would be inert,
+        # which is the worst kind of flag: one that appears to work.
         overrides["k_sigma"] = args.k
+        overrides["target_flag_rate"] = None
     if args.estimator:
         overrides["estimator"] = args.estimator
     if args.target_flag_rate is not None:
         overrides["target_flag_rate"] = args.target_flag_rate
     if args.target_review_count is not None:
+        # Same reason, plus: leaving the coverage default in place would trip
+        # the mutually-exclusive guard on every single run of this flag.
         overrides["target_review_count"] = args.target_review_count
+        overrides["target_flag_rate"] = None
     if overrides:
         cfg = dataclasses.replace(cfg, **overrides)
 
@@ -187,8 +199,13 @@ def main():
     if cfg.target_review_count is not None:
         k_desc = (f"k=solved per cell for {cfg.target_review_count:g} "
                   f"order(s)/month  (floor k={cfg.k_sigma:g})")
+        if cfg.target_flag_rate is not None:
+            print(f"\n  NOTE: a review count was given, so it overrides the "
+                  f"{100.0 - cfg.target_flag_rate:g}% coverage")
+            print("  standard in tier5/config.py for this run.")
     elif cfg.target_flag_rate is not None:
-        k_desc = f"k=solved per cell for {cfg.target_flag_rate:g}% outside"
+        k_desc = (f"k=solved per cell for "
+                  f"{100.0 - cfg.target_flag_rate:g}% coverage")
     else:
         k_desc = f"k={cfg.k_sigma:g}"
     print(f"\n  metric={cfg.metric} ({units})  {k_desc}"
@@ -236,8 +253,14 @@ def main():
                           f"few to place a bound on. Fit a longer window, or "
                           f"raise the budget.")
         elif cfg.target_flag_rate is not None:
+            cov = 100.0 - cfg.target_flag_rate
+            kn = normality.k_if_normal(cov)
             print(f"    k       {r['k_used']:>9.2f}"
-                  f"      <- what {cfg.target_flag_rate:g}% cost on this cell")
+                  f"      <- what {cov:g}% coverage cost here"
+                  f"  ({kn:.2f} if the book were normal)")
+            print(f"    an order must miss by "
+                  f"{budget.miss_to_flag(r['lo'], r['hi'], r['centre']):.1f} "
+                  f"{units} to be flagged")
         print(f"    in-sample flagged: {r['flag_rate_pct']:.2f}%")
         if r["curve_msg"]:
             print(r["curve_msg"])
@@ -258,13 +281,18 @@ def main():
         print("  change, and a run of empty months means the budget was set too")
         print("  tight to detect anything.")
     elif cfg.target_flag_rate is not None:
-        print(f"\n  k was calibrated, so the in-sample rates above equal "
-              f"{cfg.target_flag_rate:g}% BY")
-        print("  CONSTRUCTION and measure nothing. That is fine -- the rate is a")
-        print("  review-capacity decision. The number that carries information is")
-        print("  what tier5.score reports on a period the band has never seen: if")
-        print(f"  July flags well above {cfg.target_flag_rate:g}%, something "
-              f"actually changed.")
+        cov = 100.0 - cfg.target_flag_rate
+        print(f"\n  Standard: {cov:g}% coverage, set once in tier5/config.py "
+              f"(COVERAGE_PCT).")
+        print("  k is an OUTPUT of that rule, not an input, so it differs between")
+        print(f"  cells -- correctly: the promise is fixed at {cov:g}%, and the")
+        print("  multiple is whatever each book's tail costs to keep it.")
+        print(f"\n  The in-sample rates above equal {cfg.target_flag_rate:g}% BY "
+              f"CONSTRUCTION and")
+        print("  measure nothing. The number that carries information is what")
+        print("  tier5.score reports on a period the band has never seen: if July")
+        print(f"  flags well above {cfg.target_flag_rate:g}%, something actually "
+              f"changed.")
     else:
         print("  These rates are IN-SAMPLE. Run tier5.score on a later period for a")
         print("  number that measures rather than defines.")
