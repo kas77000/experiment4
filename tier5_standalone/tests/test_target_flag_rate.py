@@ -60,14 +60,17 @@ def _band(tmp_path):
 # CONFIG now carries the coverage standard (COVERAGE_PCT), so it is no longer
 # the plain fixed-k baseline these tests compare against. Name that explicitly
 # rather than letting "default" quietly mean two different things.
-FIXED_K = dataclasses.replace(t5cfg.CONFIG, target_flag_rate=None)
+# k = 3 explicitly, not "whatever CONFIG happens to hold". These tests are
+# about what a FIXED multiple does to a heavy book, so the multiple has to be
+# pinned or the test silently starts measuring the current policy instead.
+FIXED_K = dataclasses.replace(t5cfg.CONFIG, target_flag_rate=None, k_sigma=3.0)
 
 
 def test_the_shipped_default_is_the_coverage_standard():
     """The rule lives in config.py, not on the command line."""
     assert t5cfg.CONFIG.target_flag_rate == pytest.approx(
         100.0 - t5cfg.COVERAGE_PCT)
-    assert t5cfg.CONFIG.k_sigma == 3.0, "still the floor for a budgeted fit"
+    assert t5cfg.CONFIG.k_sigma == t5cfg.K_FLOOR
 
 
 def test_k_three_on_a_heavy_book_overshoots_badly(tmp_path):
@@ -146,7 +149,10 @@ def test_each_cell_is_calibrated_separately(tmp_path):
     a = _heavy(n=8000, seed=1, df=2.0)
     b = _heavy(n=8000, seed=2, df=30.0)
     b[schema.ALGO] = "TWAP"
-    cfg = dataclasses.replace(t5cfg.CONFIG, target_flag_rate=0.5)
+    # Floor lowered out of the way: this test is about the COVERAGE rule
+    # calibrating per cell, and a floor that catches both cells would flatten
+    # exactly the difference being measured.
+    cfg = dataclasses.replace(t5cfg.CONFIG, target_flag_rate=0.5, k_sigma=1.0)
     res = _fit(tmp_path, cfg, df=pd.concat([a, b], ignore_index=True))
     ks = {r["strategy"]: r["k_used"] for r in res}
     assert ks["VWAP"] > ks["TWAP"]

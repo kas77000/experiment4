@@ -66,7 +66,33 @@ LEVEL_KEYS = {
 #
 # Change THIS ONE NUMBER to move the whole desk. Nothing else needs editing,
 # and no command line changes.
-COVERAGE_PCT = 99.9
+COVERAGE_PCT = 99.5
+
+# ...and the band is never tighter than this many scales either way, whatever
+# the coverage rule works out to. The shipped rule is the WIDER of the two:
+#
+#     k = max(K_FLOOR, k that delivers COVERAGE_PCT)
+#
+# The two bounds catch opposite failures, which is why neither alone is enough:
+#
+#   COVERAGE widens a band whose tail is fatter than a Gaussian assumes. On the
+#     real HK book, k = 4 alone leaves ~0.9% outside rather than the 0.006% it
+#     advertises, so a fixed multiple quietly under-delivers exactly where the
+#     risk is.
+#   THE FLOOR stops a well-behaved cell being handed an absurdly tight band. A
+#     near-normal cell reaches 99.5% at k = 2.95, and shipping that beside HK's
+#     4.06 would give the quietest desk the harshest threshold -- the opposite
+#     of a common standard.
+#
+# What binds, per cell shape:
+#
+#     cell                        k@99.5%   floor   k used    binds
+#     HK / VWAP  (very fat)          4.06     4.0     4.06    coverage
+#     JP / VWAP  (mildly fat)        3.95     4.0     4.00    floor
+#     AU / VWAP  (near-normal)       2.95     4.0     4.00    floor
+#
+# Both numbers are reported per cell, so which one bound is never a guess.
+K_FLOOR = 4.0
 
 # classical -> mean / standard deviation   (the method as requested)
 # robust    -> median / 1.4826 * MAD       (the same band, tail-resistant)
@@ -91,7 +117,7 @@ class Tier5Config:
     # --- the band ---------------------------------------------------------
     # How many scales either side of the centre. 3.0 promises 0.27% flagged
     # IF the data is normal, which is the assumption the report tests.
-    k_sigma: float = 3.0
+    k_sigma: float = K_FLOOR
 
     # --- or: pick the review load and let the data supply k ---------------
     # A percentage. When set, k_sigma is IGNORED and each cell solves for the

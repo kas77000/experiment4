@@ -53,7 +53,8 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
                "lo": lo, "hi": hi, "k_used": cfg.k_sigma,
                "flag_rate_pct": float("nan"),
                "band_path": None, "skipped": False, "reason": "",
-               "curve_msg": "", "budget": None}
+               "curve_msg": "", "budget": None,
+               "k_from_coverage": float("nan"), "k_floored": False}
 
         if est["n"] == 0:
             # Distinct from "too few orders": the cell has rows, they just
@@ -101,10 +102,17 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
             lo, hi = est[f"lo_{e}"], est[f"hi_{e}"]
             row["lo"], row["hi"], row["k_used"] = lo, hi, float(sol["k"])
         elif cfg.target_flag_rate is not None:
-            k = normality.required_k(
+            k_cov = normality.required_k(
                 x, est[f"centre_{e}"], est[f"scale_{e}"],
                 target_outside=cfg.target_flag_rate / 100.0)["k_symmetric"]
-            if np.isfinite(k) and k > 0:
+            if np.isfinite(k_cov) and k_cov > 0:
+                # The shipped rule: the WIDER of the two bounds. k_sigma is the
+                # floor here, not a fixed multiple -- a near-normal cell must
+                # not end up with a tighter band than a fat-tailed one just
+                # because its own tail happens to be thin.
+                row["k_from_coverage"] = float(k_cov)
+                k = max(float(k_cov), float(cfg.k_sigma))
+                row["k_floored"] = k > k_cov
                 cell_cfg = dataclasses.replace(cfg, k_sigma=float(k))
                 est = band.estimates(x, float(k))
                 lo, hi = est[f"lo_{e}"], est[f"hi_{e}"]
@@ -118,7 +126,11 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
         path = cells.band_path(bands_dir, region, strategy)
         persist.save(est, cell_cfg, path, region=region, strategy=strategy,
                      source_csv=source_csv, period=period, df=g,
-                     flag_rate_pct=flag_rate, budget=row["budget"])
+                     flag_rate_pct=flag_rate, budget=row["budget"],
+                     k_floor=(cfg.k_sigma
+                              if cfg.target_flag_rate is not None else None),
+                     k_from_coverage=row["k_from_coverage"],
+                     k_floored=row["k_floored"])
         row["band_path"] = path
 
         cell_out = cells.out_dir(out_dir, "fit", period, region, strategy)
@@ -258,9 +270,14 @@ def main():
         elif cfg.target_flag_rate is not None:
             cov = 100.0 - cfg.target_flag_rate
             kn = normality.k_if_normal(cov)
-            print(f"    k       {r['k_used']:>9.2f}"
-                  f"      <- what {cov:g}% coverage cost here"
-                  f"  ({kn:.2f} if the book were normal)")
+            if r["k_floored"]:
+                print(f"    k       {r['k_used']:>9.2f}"
+                      f"      <- HELD AT THE {cfg.k_sigma:g} FLOOR"
+                      f"  ({cov:g}% needed only {r['k_from_coverage']:.2f})")
+            else:
+                print(f"    k       {r['k_used']:>9.2f}"
+                      f"      <- what {cov:g}% coverage cost here"
+                      f"  ({kn:.2f} if normal, floor {cfg.k_sigma:g})")
             print(f"    an order must miss by "
                   f"{budget.miss_to_flag(r['lo'], r['hi'], r['centre']):.1f} "
                   f"{units} to be flagged")
