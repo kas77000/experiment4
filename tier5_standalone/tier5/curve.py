@@ -42,7 +42,21 @@ def view_range(x, lo: float, hi: float, scale: float) -> tuple[float, float]:
 MAX_CAPTION_CHARS = 82
 
 
-def caption(*, n: int, k: float, outside: float, n_offscreen: int,
+def implied_k(centre: float, scale: float, lo: float, hi: float):
+    """How many scales out each bound actually sits. (k_lo, k_hi).
+
+    Derived from the band on the page rather than taken from the caller. The
+    two differ whenever something other than centre +/- k*scale set the bounds
+    -- a percentile winning a MAX, for instance -- and when they differ it is
+    the caller's number that is wrong.
+    """
+    if not np.isfinite(scale) or scale <= 0:
+        return float("nan"), float("nan")
+    return (centre - lo) / scale, (hi - centre) / scale
+
+
+def caption(*, n: int, centre: float, scale: float, lo: float, hi: float,
+            outside: float, n_offscreen: int,
             units: str, data_min: float | None = None,
             data_max: float | None = None) -> str:
     """The line under the x-axis: what the axis is in, and what it summarises.
@@ -60,9 +74,28 @@ def caption(*, n: int, k: float, outside: float, n_offscreen: int,
     view actually hides: how far the worst orders really reach.
     """
     axis = f"metric in {units}" if units else "metric"
-    # A solved k arrives as 4.339160209. Two decimals is the whole signal, and
-    # the extra digits read as false precision on a quantile of 47,000 orders.
-    k_txt = f"{k:g}" if float(k).is_integer() else f"{k:.2f}"
+
+    # k is MEASURED off the drawn bounds, never accepted as an argument. The
+    # picture once said "k = 4" with its own lines at 4.24 and 4.47, because
+    # the caller passed the configured multiple while a percentile had set the
+    # bounds. A caption is evidence about the plot it sits under or it is
+    # nothing.
+    k_lo, k_hi = implied_k(centre, scale, lo, hi)
+
+    def _fmt(v):
+        # A derived k arrives as 4.339160209. Two decimals is the whole signal;
+        # the rest reads as false precision on a quantile of 47,000 orders.
+        if not np.isfinite(v):
+            return "?"
+        return f"{v:g}" if float(v).is_integer() else f"{v:.2f}"
+
+    if np.isfinite(k_lo) and np.isfinite(k_hi) and abs(k_lo - k_hi) > 0.005:
+        # An asymmetric band cannot be summarised by one number, and averaging
+        # the two would hide exactly the skew that made it asymmetric.
+        k_txt = f"{_fmt(k_lo)} / {_fmt(k_hi)}"
+    else:
+        k_txt = _fmt(k_hi if np.isfinite(k_hi) else k_lo)
+
     lines = [f"{axis}    n = {n:,}    k = {k_txt}    "
              f"outside the band: {100 * outside:.2f}%"]
     if n_offscreen:
@@ -78,7 +111,7 @@ def caption(*, n: int, k: float, outside: float, n_offscreen: int,
 
 def plot(x, *, centre: float, scale: float, lo: float, hi: float,
          path: str, title: str, subtitle: str | None = None,
-         k: float = 3.0, normal_label: str = "fitted normal",
+         normal_label: str = "fitted normal",
          units: str = "") -> str:
     """Write the curve. Returns the line to print (never raises on a missing lib).
 
@@ -141,7 +174,8 @@ def plot(x, *, centre: float, scale: float, lo: float, hi: float,
     ax.set_xlim(x_min, x_max)
 
     ax.set_title(title, fontsize=13)
-    text = caption(n=int(x.size), k=k, outside=outside,
+    text = caption(n=int(x.size), centre=centre, scale=scale, lo=lo, hi=hi,
+                   outside=outside,
                    n_offscreen=n_offscreen, units=units,
                    data_min=float(x.min()), data_max=float(x.max()))
     if subtitle:

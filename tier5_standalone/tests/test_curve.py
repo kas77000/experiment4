@@ -109,20 +109,20 @@ def test_normal_label_is_overridable(tmp_path, sample):
 
 def test_caption_states_the_units_of_the_axis():
     """A bare "-5.59" on the x-axis is unreadable, and bps is the wrong guess."""
-    text = curve.caption(n=260, k=3.0, outside=0.0808, n_offscreen=0,
+    text = curve.caption(n=260, centre=0.0, scale=1.0, lo=-3.0, hi=3.0, outside=0.0808, n_offscreen=0,
                          units="spreads")
     assert "spreads" in text
 
 
 def test_caption_still_reports_offscreen_orders():
-    text = curve.caption(n=260, k=3.0, outside=0.08, n_offscreen=2,
+    text = curve.caption(n=260, centre=0.0, scale=1.0, lo=-3.0, hi=3.0, outside=0.08, n_offscreen=2,
                          units="spreads")
     assert "2 orders" in text
     assert "counted" in text        # clipping the view never clips the data
 
 
 def test_caption_omits_units_when_there_are_none():
-    text = curve.caption(n=10, k=3.0, outside=0.0, n_offscreen=0, units="")
+    text = curve.caption(n=10, centre=0.0, scale=1.0, lo=-3.0, hi=3.0, outside=0.0, n_offscreen=0, units="")
     assert "()" not in text
 
 
@@ -134,26 +134,26 @@ def test_offscreen_note_names_the_rule_that_produced_it():
     """view_range clips at the 0.2/99.8 percentiles, so the count is ALWAYS
     0.4% of n. Reporting a bare number invites the reader to think their book
     is unusual when the figure is pure arithmetic."""
-    text = curve.caption(n=46950, k=3.0, outside=0.0242, n_offscreen=188,
+    text = curve.caption(n=46950, centre=0.0, scale=1.0, lo=-3.0, hi=3.0, outside=0.0242, n_offscreen=188,
                          units="spreads", data_min=-24.1, data_max=22.6)
     assert "percentile" in text.lower()
 
 
 def test_offscreen_note_gives_the_share_not_just_the_count():
-    text = curve.caption(n=46950, k=3.0, outside=0.0242, n_offscreen=188,
+    text = curve.caption(n=46950, centre=0.0, scale=1.0, lo=-3.0, hi=3.0, outside=0.0242, n_offscreen=188,
                          units="spreads", data_min=-24.1, data_max=22.6)
     assert "0.4" in text
 
 
 def test_offscreen_note_says_how_far_the_data_actually_reaches():
     """The genuinely useful fact the clipped view hides."""
-    text = curve.caption(n=46950, k=3.0, outside=0.0242, n_offscreen=188,
+    text = curve.caption(n=46950, centre=0.0, scale=1.0, lo=-3.0, hi=3.0, outside=0.0242, n_offscreen=188,
                          units="spreads", data_min=-24.1, data_max=22.6)
     assert "-24.1" in text and "22.6" in text
 
 
 def test_nothing_offscreen_means_no_note():
-    text = curve.caption(n=1000, k=3.0, outside=0.01, n_offscreen=0,
+    text = curve.caption(n=1000, centre=0.0, scale=1.0, lo=-3.0, hi=3.0, outside=0.01, n_offscreen=0,
                          units="spreads", data_min=-5.0, data_max=5.0)
     assert "percentile" not in text.lower()
     assert "beyond" not in text.lower()
@@ -168,7 +168,7 @@ def test_plot_passes_the_real_extremes_through(tmp_path):
 
 def test_caption_lines_fit_inside_the_figure():
     """A caption wider than the axes is silently truncated at both ends."""
-    text = curve.caption(n=46950, k=3.0, outside=0.0242, n_offscreen=188,
+    text = curve.caption(n=46950, centre=0.0, scale=1.0, lo=-3.0, hi=3.0, outside=0.0242, n_offscreen=188,
                          units="spreads", data_min=-15.7, data_max=14.9)
     longest = max(len(l) for l in text.splitlines())
     assert longest <= curve.MAX_CAPTION_CHARS, f"longest line is {longest}"
@@ -176,13 +176,13 @@ def test_caption_lines_fit_inside_the_figure():
 
 def test_a_solved_k_is_not_printed_to_five_decimals():
     """--target-flag-rate produces k like 4.33916; two decimals is the signal."""
-    text = curve.caption(n=100, k=4.339160209, outside=0.01, n_offscreen=0,
+    text = curve.caption(n=100, centre=0.0, scale=1.0, lo=-4.339160209, hi=4.339160209, outside=0.01, n_offscreen=0,
                          units="spreads")
     assert "k = 4.34" in text
     assert "4.339" not in text
 
 
 def test_a_whole_k_stays_clean():
-    text = curve.caption(n=100, k=3.0, outside=0.01, n_offscreen=0,
+    text = curve.caption(n=100, centre=0.0, scale=1.0, lo=-3.0, hi=3.0, outside=0.01, n_offscreen=0,
                          units="spreads")
     assert "k = 3 " in text or text.rstrip().endswith("k = 3")

@@ -172,7 +172,6 @@ def score_frame(df, base_cfg, *, bands_dir: str, out_dir: str,
             title=f"{region} / {strategy}  --  {period} vs frozen band",
             subtitle=f"band frozen on {frozen.get('fit_period')}"
                      f"  --  the dashed curve is that band, NOT a refit",
-            k=float(frozen["k_sigma"]),
             normal_label="frozen band's normal",
             units=frozen.get("metric_units", ""))
 

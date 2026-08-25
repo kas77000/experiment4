@@ -153,7 +153,7 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
             x, centre=row["centre"], scale=row["scale"], lo=lo, hi=hi,
             path=os.path.join(cell_out, "curve.png"),
             title=f"{region} / {strategy}  --  {cfg.metric}",
-            subtitle=f"fitted on {period}", k=row["k_used"],
+            subtitle=f"fitted on {period}",
             units=t5cfg.units_of(cfg.metric))
 
         results.append(row)
