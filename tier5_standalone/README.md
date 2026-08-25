@@ -35,6 +35,33 @@ whole point of `fit` then `score`.
 
 ---
 
+## Copying this folder to another machine
+
+The release is **`config.py` + `tca/` + `tier5/` together**. `config.py` sits at
+the top level rather than inside a folder, which is exactly why it gets left
+behind when the two directories are dragged across — and a stale one fails
+late and cryptically, several steps into a fit.
+
+Zip the whole folder rather than dragging parts of it, then check the copy
+**before** running anything:
+
+```bash
+python -m tier5.compat
+```
+
+```
+OK -- config.py, tca/ and tier5/ are the same release.
+    config         ...	ier5_standalone\config.py
+    tca.report     ...	ier5_standalone	caeport.py
+    ...
+```
+
+A mismatch names every missing attribute and every moved signature at once,
+and prints where each module was loaded from — because a foreign `tca` on
+`sys.path` raises exactly the same error as a stale copy, and only the path
+tells them apart. `fit`, `score` and `batch` run the same check before argparse,
+so a bad copy costs a second rather than a minute of reading the extract.
+
 ## Install
 
 ```bash
