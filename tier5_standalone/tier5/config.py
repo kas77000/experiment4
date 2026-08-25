@@ -30,69 +30,48 @@ LEVEL_KEYS = {
 }
 
 # --- THE STANDARD --------------------------------------------------------
-# The share of orders a band is meant to contain. This is the ONE number the
-# whole workflow turns on, and it is set here rather than passed on the command
-# line so that every run, every region, every strategy and every refit applies
-# the same rule without anybody having to remember a flag.
+# The band, stated the way the desk states it:
 #
-# Read it as the sentence you would say out loud: "our threshold is the 99.9th
-# percentile of the last year's execution." That sentence is defensible in a
-# way "k = 4.97" is not, and it does not change when the book does.
+#     hi = MAX(mean + K_SIGMA * sigma,   P(PERCENTILE_PCT))
+#     lo = MIN(mean - K_SIGMA * sigma,   P(100 - PERCENTILE_PCT))
 #
-# WHY A COVERAGE AND NOT A SIGMA MULTIPLE. They are the same statement only
-# under a normal distribution -- "3 sigma" and "99.73% coverage" are two ways
-# of saying one thing, and 99.9% is 3.29 sigma. Execution books are not normal,
-# so the two come apart, and only one of them survives the split:
+# Set here rather than passed on the command line, so every run, every region,
+# every strategy and every refit applies the same rule without anybody having
+# to remember a flag.
 #
-#   fix the MULTIPLE at 3.0 -> the coverage floats. On a real HK VWAP book it
-#                              lands at 97.6%, and the threshold silently means
-#                              something different in every cell.
-#   fix the COVERAGE at 99.9% -> the multiple floats. It came out at 4.97 on
-#                              that book and 3.29 if the book had been normal.
-#                              The rule holds; k reports what it cost.
+# The sigma term is LITERAL. centre + k*scale, nothing solved and nothing
+# adjusted, so "mean plus four sigma" is visibly what it says on the page.
+# An earlier version of this file solved for the k that delivered a coverage
+# target, which is a defensible rule and a different one: it printed k = 4.97
+# where the desk had asked for four, and read as though sigma had been
+# replaced rather than used.
 #
-# The second is the systematic one, because the promise is what you defend and
-# the multiple is only ever the means. k is now an OUTPUT of every fit, printed
-# beside the k a normal book would have needed -- and the gap between those two
-# numbers is this book's non-normality, in one figure.
+# TWO PROPERTIES WORTH KNOWING, both easy to lose in conversation:
 #
-# What it costs, on a 47k-order HK VWAP book (sd 2.67 spreads):
+#   IT IS PER SIDE. Slippage is skewed -- a book misses badly far more often
+#   than it beats badly -- so forcing both tails through one multiple makes
+#   the band wrong on at least one of them. Each side takes whichever of its
+#   own two candidates is wider, and the two can bind differently.
 #
-#     coverage    k if normal    k here    band (spreads)    to review
-#      99.00%        2.58         3.61     -9.98 ..  9.27     39/month
-#      99.73%        3.00         4.44    -12.19 .. 11.47     11/month
-#      99.90%        3.29         4.97    -13.59 .. 12.87      4/month   <- set
-#      99.95%        3.48         5.27    -14.40 .. 13.68      2/month
+#   P99.5 IS NOT "99.5% COVERAGE". P99.5 leaves 0.5% of orders above it in the
+#   upper tail alone. A 99.5%-coverage band splits that 0.5% across BOTH
+#   tails and therefore sits nearer P99.75. The two read identically in a
+#   meeting and differ by a real amount on the page.
 #
-# Change THIS ONE NUMBER to move the whole desk. Nothing else needs editing,
-# and no command line changes.
-COVERAGE_PCT = 99.5
-
-# ...and the band is never tighter than this many scales either way, whatever
-# the coverage rule works out to. The shipped rule is the WIDER of the two:
+# WHICH TERM ACTUALLY BINDS. On a book shaped like the real HK VWAP one:
 #
-#     k = max(K_FLOOR, k that delivers COVERAGE_PCT)
+#     mean + 4*sigma =  10.54        P99.5  =   8.30    -> hi = 10.54 (sigma)
+#     mean - 4*sigma = -12.14        P0.5   = -11.65    -> lo = -12.14 (sigma)
 #
-# The two bounds catch opposite failures, which is why neither alone is enough:
-#
-#   COVERAGE widens a band whose tail is fatter than a Gaussian assumes. On the
-#     real HK book, k = 4 alone leaves ~0.9% outside rather than the 0.006% it
-#     advertises, so a fixed multiple quietly under-delivers exactly where the
-#     risk is.
-#   THE FLOOR stops a well-behaved cell being handed an absurdly tight band. A
-#     near-normal cell reaches 99.5% at k = 2.95, and shipping that beside HK's
-#     4.06 would give the quietest desk the harshest threshold -- the opposite
-#     of a common standard.
-#
-# What binds, per cell shape:
-#
-#     cell                        k@99.5%   floor   k used    binds
-#     HK / VWAP  (very fat)          4.06     4.0     4.06    coverage
-#     JP / VWAP  (mildly fat)        3.95     4.0     4.00    floor
-#     AU / VWAP  (near-normal)       2.95     4.0     4.00    floor
-#
-# Both numbers are reported per cell, so which one bound is never a guess.
-K_FLOOR = 4.0
+# So at K_SIGMA = 4 the sigma term wins on both sides and the percentile never
+# fires. That is not a fault -- it is what the MAX is for -- but it does mean
+# the shipped rule is effectively "mean +/- 4 sigma" on this book, with the
+# percentile standing by in case a cell's tail is heavy enough to need it.
+# Lower K_SIGMA and the percentile starts binding; raise it and it never will.
+# Every fit prints both candidates and which one won, per side, so this is
+# never something to guess at.
+K_SIGMA = 4.0
+PERCENTILE_PCT = 99.5
 
 # classical -> mean / standard deviation   (the method as requested)
 # robust    -> median / 1.4826 * MAD       (the same band, tail-resistant)
@@ -117,7 +96,7 @@ class Tier5Config:
     # --- the band ---------------------------------------------------------
     # How many scales either side of the centre. 3.0 promises 0.27% flagged
     # IF the data is normal, which is the assumption the report tests.
-    k_sigma: float = K_FLOOR
+    k_sigma: float = K_SIGMA
 
     # --- or: pick the review load and let the data supply k ---------------
     # A percentage. When set, k_sigma is IGNORED and each cell solves for the
@@ -138,7 +117,7 @@ class Tier5Config:
     # Note the fit-book rate then equals the target BY CONSTRUCTION, so it
     # measures nothing. The out-of-sample number from tier5.score is still a
     # measurement, and is the one that carries information.
-    target_flag_rate: float | None = round(100.0 - COVERAGE_PCT, 10)
+    target_flag_rate: float | None = None
 
     # --- or: pick the review load in ORDERS and let each cell supply its own
     # k. Orders per cell per MONTH. When set, both k_sigma and
@@ -155,6 +134,10 @@ class Tier5Config:
     # Without that a 400-order cell asking for 2 a month would be handed a
     # 6% flag rate, a tighter band than the busy desk beside it.
     target_review_count: float | None = None
+
+    # The percentile half of the shipped rule. None switches it off, leaving a
+    # plain mean +/- k*sigma band.
+    band_percentile: float | None = PERCENTILE_PCT
 
     # --- which metric to band --------------------------------------------
     #   PERF_IN_SPREADS -> slippage / spread          (the default)

@@ -23,6 +23,10 @@ import pytest
 from tca import pipeline
 from tier5 import config as t5cfg, fit
 
+# The coverage rule is now an opt-in; this file tests IT and the k floor
+# that bounds it, not the shipped per-side rule (see test_band_rule.py).
+COVERAGE = 99.5
+
 
 def _book(n, w, s1, s2, seed):
     """A normal mixture: `w` of the mass tight, the rest heavy-tailed."""
@@ -55,33 +59,36 @@ def _fit(tmp_path, spreads, **over):
     prep, _ = pipeline.prepare(_extract(spreads), appcfg.COLUMN_MAP,
                                appcfg.DATA, appcfg.SLIPPAGE_SIGN,
                                pre_transform=appcfg.PRE_TRANSFORM)
+    # These exercise the COVERAGE rule, which is now an opt-in: the
+    # shipped per-side rule would otherwise take precedence over it.
+    over.setdefault("band_percentile", None)
+    over.setdefault("target_flag_rate", round(100.0 - 99.5, 10))
     cfg = dataclasses.replace(t5cfg.CONFIG, **over)
     return fit.fit_frame(prep, cfg, bands_dir=str(tmp_path / "bands"),
                          out_dir=str(tmp_path / "out"), source_csv="t.csv")[0]
 
 
 class TestTheRuleIsShipped:
-    def test_config_states_both_bounds(self):
-        assert t5cfg.K_FLOOR == 4.0
-        assert t5cfg.COVERAGE_PCT == 99.5
+    def test_config_states_the_sigma_multiple(self):
+        assert t5cfg.K_SIGMA == 4.0
 
-    def test_the_floor_is_the_default_k(self):
-        assert t5cfg.CONFIG.k_sigma == t5cfg.K_FLOOR
+    def test_the_floor_is_the_configured_multiple(self):
+        assert t5cfg.CONFIG.k_sigma == t5cfg.K_SIGMA
 
     def test_a_bare_fit_applies_it_with_no_arguments(self, tmp_path):
         r = _fit(tmp_path, FAT)
-        assert r["k_used"] >= t5cfg.K_FLOOR
+        assert r["k_used"] >= t5cfg.K_SIGMA
 
 
 class TestWhichBoundBinds:
     def test_a_fat_tail_is_widened_past_the_floor(self, tmp_path):
         r = _fit(tmp_path, FAT)
-        assert r["k_used"] > t5cfg.K_FLOOR
+        assert r["k_used"] > t5cfg.K_SIGMA
         assert not r["k_floored"]
 
     def test_a_near_normal_cell_is_held_at_the_floor(self, tmp_path):
         r = _fit(tmp_path, NEAR_NORMAL)
-        assert r["k_used"] == pytest.approx(t5cfg.K_FLOOR)
+        assert r["k_used"] == pytest.approx(t5cfg.K_SIGMA)
         assert r["k_floored"]
 
     def test_the_floor_case_would_have_been_much_tighter(self, tmp_path):
@@ -92,17 +99,17 @@ class TestWhichBoundBinds:
     def test_it_is_never_tighter_than_either_bound(self, tmp_path):
         for spreads in (FAT, NEAR_NORMAL):
             r = _fit(tmp_path, spreads)
-            assert r["k_used"] >= t5cfg.K_FLOOR - 1e-9
+            assert r["k_used"] >= t5cfg.K_SIGMA - 1e-9
             assert r["k_used"] >= r["k_from_coverage"] - 1e-9
 
     def test_the_floored_cell_flags_fewer_than_the_coverage_target(self, tmp_path):
         """A wider band than 99.5% asked for means fewer outside, not more."""
         r = _fit(tmp_path, NEAR_NORMAL)
-        assert r["flag_rate_pct"] < 100.0 - t5cfg.COVERAGE_PCT
+        assert r["flag_rate_pct"] < 100.0 - COVERAGE
 
     def test_the_coverage_cell_delivers_the_target(self, tmp_path):
         r = _fit(tmp_path, FAT)
-        assert r["flag_rate_pct"] == pytest.approx(100.0 - t5cfg.COVERAGE_PCT,
+        assert r["flag_rate_pct"] == pytest.approx(100.0 - COVERAGE,
                                                    abs=0.05)
 
 

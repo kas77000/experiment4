@@ -45,6 +45,8 @@ def _fit(df, tmp_path, **over):
     # spell that out here so each test states one rule, not two.
     if over.get("target_review_count") is not None:
         over.setdefault("target_flag_rate", None)   # the CLI does this too
+    # A plain fit here means "no rule at all", not the shipped per-side one.
+    over.setdefault("band_percentile", None)
     cfg = dataclasses.replace(t5cfg.CONFIG, **over)
     return fit.fit_frame(_prepared(df), cfg,
                          bands_dir=str(tmp_path / "bands"),
@@ -93,7 +95,7 @@ class TestGuards:
         # 600 orders a year cannot supply 24 a year without a 4% flag rate.
         r = _fit(_extract(n=600), tmp_path,
                  target_review_count=2, min_group_n=100)[0]
-        assert r["k_used"] == t5cfg.K_FLOOR
+        assert r["k_used"] == t5cfg.K_SIGMA
         assert r["budget"]["floored"]
 
     def test_the_floor_never_narrows_the_band(self, tmp_path):

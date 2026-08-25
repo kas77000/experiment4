@@ -17,6 +17,8 @@ import pytest
 from tca import pipeline
 from tier5 import config as t5cfg, fit, normality
 
+COVERAGE = 99.5
+
 
 def _extract(n=24_000, seed=4):
     rng = np.random.default_rng(seed)
@@ -38,6 +40,10 @@ def _fit(tmp_path, df=None, **over):
     prep, _ = pipeline.prepare(df, appcfg.COLUMN_MAP, appcfg.DATA,
                                appcfg.SLIPPAGE_SIGN,
                                pre_transform=appcfg.PRE_TRANSFORM)
+    # These exercise the COVERAGE rule, which is now an opt-in: the
+    # shipped per-side rule would otherwise take precedence over it.
+    over.setdefault("band_percentile", None)
+    over.setdefault("target_flag_rate", round(100.0 - 99.5, 10))
     cfg = dataclasses.replace(t5cfg.CONFIG, **over)
     return fit.fit_frame(prep, cfg, bands_dir=str(tmp_path / "bands"),
                          out_dir=str(tmp_path / "out"), source_csv="t.csv")[0]
@@ -46,22 +52,23 @@ def _fit(tmp_path, df=None, **over):
 class TestTheStandardIsTheDefault:
     def test_config_states_a_coverage_not_a_flag_rate(self):
         """The rule is a coverage; the value is policy and may move."""
-        assert 90.0 < t5cfg.COVERAGE_PCT < 100.0
+        assert 90.0 < COVERAGE < 100.0
 
-    def test_the_default_config_already_solves_for_it(self):
-        """No flag, no argument: a bare fit applies the standard."""
-        assert t5cfg.CONFIG.target_flag_rate == pytest.approx(
-            100.0 - t5cfg.COVERAGE_PCT)
+    def test_the_coverage_rule_is_opt_in_not_the_default(self):
+        """It moved: the shipped default is the per-side MAX rule, and a bare
+        CONFIG must not silently mean coverage any more."""
+        assert t5cfg.CONFIG.target_flag_rate is None
+        assert t5cfg.CONFIG.band_percentile == t5cfg.PERCENTILE_PCT
 
     def test_a_bare_fit_delivers_the_stated_coverage(self, tmp_path):
         r = _fit(tmp_path)
         # <= not ==: the floor may widen past the target, never below it.
-        assert r["flag_rate_pct"] <= 100.0 - t5cfg.COVERAGE_PCT + 0.02
+        assert r["flag_rate_pct"] <= 100.0 - COVERAGE + 0.02
 
     def test_a_bare_fit_is_never_tighter_than_the_floor(self, tmp_path):
         """The whole point: a fat book costs far more than a textbook 3."""
         r = _fit(tmp_path)
-        assert r["k_used"] >= t5cfg.K_FLOOR
+        assert r["k_used"] >= t5cfg.K_SIGMA
         assert r["k_used"] > 3.0
 
     def test_it_is_still_centre_plus_k_scale(self, tmp_path):
@@ -126,9 +133,9 @@ class TestProvenance:
     def test_the_band_records_the_standard_it_was_cut_to(self, tmp_path):
         r = _fit(tmp_path)
         saved = json.loads(open(r["band_path"]).read())
-        assert saved["coverage_pct"] == pytest.approx(t5cfg.COVERAGE_PCT)
+        assert saved["coverage_pct"] == pytest.approx(COVERAGE)
         assert saved["k_if_normal"] == pytest.approx(
-            normality.k_if_normal(t5cfg.COVERAGE_PCT), abs=0.005)
+            normality.k_if_normal(COVERAGE), abs=0.005)
         assert saved["k_sigma"] == pytest.approx(r["k_used"])
 
     def test_the_gap_between_the_two_ks_is_the_non_normality(self, tmp_path):

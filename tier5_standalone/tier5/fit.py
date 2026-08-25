@@ -54,7 +54,8 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
                "flag_rate_pct": float("nan"),
                "band_path": None, "skipped": False, "reason": "",
                "curve_msg": "", "budget": None,
-               "k_from_coverage": float("nan"), "k_floored": False}
+               "k_from_coverage": float("nan"), "k_floored": False,
+               "rule": None}
 
         if est["n"] == 0:
             # Distinct from "too few orders": the cell has rows, they just
@@ -81,8 +82,10 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
         #
         # PRECEDENCE, most specific first:
         #   target_review_count  -- a workload, in orders per cell per month
-        #   target_flag_rate     -- a coverage standard, from COVERAGE_PCT
-        #   k_sigma              -- a fixed multiple
+        #   band_percentile      -- the SHIPPED rule: per side, the wider of
+        #                           mean +/- k*sigma and the empirical percentile
+        #   target_flag_rate     -- a two-sided coverage target, k solved
+        #   k_sigma              -- a plain fixed multiple
         # This used to raise when the first two were both set, which was right
         # while both were opt-in and wrong the moment coverage became the
         # standing default in config.py: every single --target-review-count run
@@ -101,6 +104,15 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
             est = band.estimates(x, float(sol["k"]))
             lo, hi = est[f"lo_{e}"], est[f"hi_{e}"]
             row["lo"], row["hi"], row["k_used"] = lo, hi, float(sol["k"])
+        elif getattr(cfg, "band_percentile", None) is not None:
+            # The shipped rule: per side, the wider of the sigma term and the
+            # empirical percentile. k is NOT solved here -- the sigma term is
+            # literally centre + k*scale.
+            est, detail = band.apply_rule(est, x, k=cfg.k_sigma,
+                                          percentile=cfg.band_percentile)
+            lo, hi = est[f"lo_{e}"], est[f"hi_{e}"]
+            row["lo"], row["hi"] = lo, hi
+            row["rule"] = detail[e]
         elif cfg.target_flag_rate is not None:
             k_cov = normality.required_k(
                 x, est[f"centre_{e}"], est[f"scale_{e}"],
@@ -130,7 +142,7 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
                      k_floor=(cfg.k_sigma
                               if cfg.target_flag_rate is not None else None),
                      k_from_coverage=row["k_from_coverage"],
-                     k_floored=row["k_floored"])
+                     k_floored=row["k_floored"], rule=row["rule"])
         row["band_path"] = path
 
         cell_out = cells.out_dir(out_dir, "fit", period, region, strategy)
@@ -192,15 +204,18 @@ def main():
         # which is the worst kind of flag: one that appears to work.
         overrides["k_sigma"] = args.k
         overrides["target_flag_rate"] = None
+        overrides["band_percentile"] = None
     if args.estimator:
         overrides["estimator"] = args.estimator
     if args.target_flag_rate is not None:
         overrides["target_flag_rate"] = args.target_flag_rate
+        overrides["band_percentile"] = None
     if args.target_review_count is not None:
         # Same reason, plus: leaving the coverage default in place would trip
         # the mutually-exclusive guard on every single run of this flag.
         overrides["target_review_count"] = args.target_review_count
         overrides["target_flag_rate"] = None
+        overrides["band_percentile"] = None
     if overrides:
         cfg = dataclasses.replace(cfg, **overrides)
 
@@ -218,6 +233,9 @@ def main():
             print(f"\n  NOTE: a review count was given, so it overrides the "
                   f"{100.0 - cfg.target_flag_rate:g}% coverage")
             print("  standard in tier5/config.py for this run.")
+    elif getattr(cfg, "band_percentile", None) is not None:
+        k_desc = (f"band = MAX(mean +/- {cfg.k_sigma:g}*sigma, "
+                  f"P{cfg.band_percentile:g}/P{100 - cfg.band_percentile:g})")
     elif cfg.target_flag_rate is not None:
         k_desc = (f"k=solved per cell for "
                   f"{100.0 - cfg.target_flag_rate:g}% coverage")
@@ -267,6 +285,18 @@ def main():
                     print(f"    THIN TAIL: {b.get('n_tail', 0)} order(s) is "
                           f"few to place a bound on. Fit a longer window, or "
                           f"raise the budget.")
+        elif r["rule"] is not None:
+            d = r["rule"]
+            ks, pc = cfg.k_sigma, cfg.band_percentile
+            print(f"    mean + {ks:g}*sigma  {d['hi_sigma']:>9.2f}"
+                  f"      P{pc:g}   {d['hi_pct']:>9.2f}"
+                  f"   ->  hi  {d['hi']:>8.2f}  ({d['hi_binds']})")
+            print(f"    mean - {ks:g}*sigma  {d['lo_sigma']:>9.2f}"
+                  f"      P{100 - pc:g}    {d['lo_pct']:>9.2f}"
+                  f"   ->  lo  {d['lo']:>8.2f}  ({d['lo_binds']})")
+            print(f"    an order must miss by "
+                  f"{budget.miss_to_flag(r['lo'], r['hi'], r['centre']):.1f} "
+                  f"{units} to be flagged")
         elif cfg.target_flag_rate is not None:
             cov = 100.0 - cfg.target_flag_rate
             kn = normality.k_if_normal(cov)
@@ -300,6 +330,16 @@ def main():
               f"real")
         print("  change, and a run of empty months means the budget was set too")
         print("  tight to detect anything.")
+    elif getattr(cfg, "band_percentile", None) is not None:
+        ks, pc = cfg.k_sigma, cfg.band_percentile
+        print(f"\n  Rule: hi = MAX(mean + {ks:g}*sigma, P{pc:g}),  "
+              f"lo = MIN(mean - {ks:g}*sigma, P{100 - pc:g})")
+        print("  set once in tier5/config.py (K_SIGMA, PERCENTILE_PCT). Both")
+        print("  candidates and the winner are printed per side above, because a")
+        print("  percentile that never binds is worth knowing about: it means the")
+        print("  the sigma term is doing the work and the net stands by unused.")
+        print("\n  These rates are IN-SAMPLE. Run tier5.score on a later period")
+        print("  for a number that measures rather than defines.")
     elif cfg.target_flag_rate is not None:
         cov = 100.0 - cfg.target_flag_rate
         print(f"\n  Standard: {cov:g}% coverage, set once in tier5/config.py "
