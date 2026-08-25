@@ -291,7 +291,7 @@ def test_bounds_come_out_in_spreads_not_bps(tmp_path, capsys):
     """The end-to-end guard against dividing by the spread a second time."""
     import json
     csv = _extract(str(tmp_path / "year.csv"), "VWAP", 800, 11)
-    _run_fit(tmp_path, csv)
+    _run_fit(tmp_path, csv, k=3.0)     # units test: the multiple must be pinned
     with open(tmp_path / "bands" / "HK" / "VWAP.json") as fh:
         saved = json.load(fh)
     # Fitted on a N(-0.8, 1.6) book in spreads: 3 sigma lands near +/- 5.

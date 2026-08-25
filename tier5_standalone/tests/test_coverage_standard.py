@@ -68,7 +68,7 @@ class TestTheStandardIsTheDefault:
     def test_a_bare_fit_is_never_tighter_than_the_floor(self, tmp_path):
         """The whole point: a fat book costs far more than a textbook 3."""
         r = _fit(tmp_path)
-        assert r["k_used"] >= t5cfg.K_SIGMA
+        assert r["k_used"] >= t5cfg.BUDGET_K_FLOOR
         assert r["k_used"] > 3.0
 
     def test_it_is_still_centre_plus_k_scale(self, tmp_path):
