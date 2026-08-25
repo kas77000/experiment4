@@ -47,6 +47,7 @@ def _fit(df, tmp_path, **over):
         over.setdefault("target_flag_rate", None)   # the CLI does this too
     # A plain fit here means "no rule at all", not the shipped per-side one.
     over.setdefault("band_percentile", None)
+    over.setdefault("band_abs", None)
     cfg = dataclasses.replace(t5cfg.CONFIG, **over)
     return fit.fit_frame(_prepared(df), cfg,
                          bands_dir=str(tmp_path / "bands"),

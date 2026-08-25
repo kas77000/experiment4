@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 
@@ -51,9 +52,30 @@ def test_writes_one_band_per_cell(tmp_path):
                                               region, strategy))
 
 
-def test_bands_differ_between_cells(tmp_path):
+def test_an_absolute_band_is_the_same_for_every_cell(tmp_path):
+    """The shipped band is stated, so of course it does not vary by cell.
+
+    Worth a test rather than a shrug: a per-cell band was the previous
+    behaviour, and the property that replaced it is exactly the one somebody
+    will question. What must STILL vary is the measurement underneath.
+    """
     res = fit.fit_frame(_book(), t5cfg.CONFIG,
                         bands_dir=str(tmp_path / "bands"),
+                        out_dir=str(tmp_path / "outputs"),
+                        source_csv="year.csv")
+    los = {(r["region"], r["strategy"]): r["lo"] for r in res}
+    assert los[("HK", "TWAP")] == los[("HK", "VWAP")]
+
+    centres = {(r["region"], r["strategy"]): r["centre"] for r in res}
+    scales = {(r["region"], r["strategy"]): r["scale"] for r in res}
+    assert centres[("HK", "TWAP")] != centres[("HK", "VWAP")]
+    assert scales[("HK", "TWAP")] != scales[("HK", "VWAP")]
+
+
+def test_a_fitted_band_still_differs_between_cells(tmp_path):
+    """Switch the absolute band off and per-cell fitting comes back."""
+    cfg = dataclasses.replace(t5cfg.CONFIG, band_abs=None)
+    res = fit.fit_frame(_book(), cfg, bands_dir=str(tmp_path / "bands"),
                         out_dir=str(tmp_path / "outputs"),
                         source_csv="year.csv")
     los = {(r["region"], r["strategy"]): r["lo"] for r in res}

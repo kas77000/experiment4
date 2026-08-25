@@ -89,6 +89,31 @@ LEVEL_KEYS = {
 K_SIGMA = 9.0
 PERCENTILE_PCT = 99.5
 
+# --- THE SHIPPED BAND ----------------------------------------------------
+# An ABSOLUTE band, in the metric's own units: -20 .. +20 spreads.
+#
+# This is a POLICY, not an estimate, and that is the whole point of it. The
+# fitted rules above all move with the book -- a quarter of worse execution
+# raises the mean and inflates sigma, so a sigma band silently WIDENS exactly
+# when performance deteriorates, and the threshold forgives the drift it was
+# meant to catch. An absolute bound cannot do that.
+#
+# Symmetric about ZERO, not about the book's mean. For a spread-normalised
+# metric zero is a real reference point -- the order matched interval VWAP
+# exactly -- so "twenty spreads either side of matching the benchmark" is a
+# sentence that means something on its own, without knowing what the book did
+# last year.
+#
+# What it costs on the real HK VWAP book (centre -0.36, sigma 2.67): +/-20
+# spreads is about 7.6 sigma, which leaves roughly one order a quarter outside.
+# The fit still computes centre and scale and prints the implied multiple
+# beside the band, so how loose or tight this policy is ON THIS BOOK stays
+# visible rather than assumed.
+#
+# Set to None to fall back to the fitted rule (MAX(mean +/- K_SIGMA*sigma,
+# P(PERCENTILE_PCT))) documented above.
+BAND_ABS_SPREADS = 20.0
+
 # The floor for the OPT-IN overrides only, and deliberately not K_SIGMA.
 #
 # k_sigma used to serve both jobs -- the shipped band width and the floor under
@@ -162,9 +187,13 @@ class Tier5Config:
     # 6% flag rate, a tighter band than the busy desk beside it.
     target_review_count: float | None = None
 
-    # The percentile half of the shipped rule. None switches it off, leaving a
+    # The percentile half of the fitted rule. None switches it off, leaving a
     # plain mean +/- k*sigma band.
     band_percentile: float | None = PERCENTILE_PCT
+
+    # The absolute band, in metric units. Outranks the fitted rules; None falls
+    # back to them.
+    band_abs: float | None = BAND_ABS_SPREADS
 
     # --- which metric to band --------------------------------------------
     #   PERF_IN_SPREADS -> slippage / spread          (the default)

@@ -73,7 +73,8 @@ def save(est: dict, cfg, path: str, *, region: str, strategy: str,
          k_floor: float | None = None,
          k_from_coverage: float | None = None,
          k_floored: bool = False,
-         rule: dict | None = None) -> str:
+         rule: dict | None = None,
+         band_abs: float | None = None) -> str:
     """Write one frozen band to JSON."""
     e = cfg.estimator
     d_lo, d_hi = cells.date_range(df)
@@ -96,7 +97,8 @@ def save(est: dict, cfg, path: str, *, region: str, strategy: str,
         # How k was arrived at. A band at k = 5.9 must not read as somebody's
         # arbitrary guess six months from now: either it is the config default
         # or it is the k that delivered a stated review load on this cell.
-        "k_source": ("sigma_or_percentile" if rule else
+        "k_source": ("absolute" if band_abs is not None else
+                     "sigma_or_percentile" if rule else
                      "target_review_count"
                      if getattr(cfg, "target_review_count", None) is not None
                      else "k_floor" if k_floored
@@ -106,6 +108,9 @@ def save(est: dict, cfg, path: str, *, region: str, strategy: str,
         # is a fact in the file rather than something to re-derive.
         # Both candidates and the winner, per side. Without these, "hi = 10.30"
         # gives no way to tell whether the percentile was ever in play.
+        # An absolute band is a POLICY, and must read as one a year from now:
+        # nothing about it was estimated from this book.
+        "band_abs": (float(band_abs) if band_abs is not None else None),
         "band_rule": ({"k_sigma": rule["k"], "percentile": rule["percentile"],
                        "hi_sigma": _f(rule["hi_sigma"]),
                        "hi_pct": _f(rule["hi_pct"]),

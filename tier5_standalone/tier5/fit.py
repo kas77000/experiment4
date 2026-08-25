@@ -24,6 +24,38 @@ from tier5 import (band, budget, cells, compat, config as t5cfg, curve,
                    normality, persist)
 
 
+def active_rule(cfg) -> str:
+    """Which rule sets the bounds. The ONLY place precedence is decided.
+
+    PRECEDENCE, most specific first:
+        review_count  -- a workload, in orders per cell per month   (explicit)
+        flag_rate     -- a two-sided coverage target, k solved      (explicit)
+        absolute      -- an absolute band in metric units           (shipped)
+        percentile    -- per side, the wider of mean +/- k*sigma and P(pct)
+        fixed         -- a plain fixed multiple
+
+    EXPLICIT OVERRIDES COME BEFORE THE SHIPPED DEFAULTS ON PURPOSE. Three
+    separate times a new shipped default silently made a flag inert, because
+    the default sat earlier in the chain and the CLI had to remember to clear
+    it. Ordering the explicit-only options first makes that structurally
+    impossible rather than something to remember.
+
+    And it is a FUNCTION because the chain was written out twice -- once to
+    choose the band and once to describe it -- which promptly drifted, so a run
+    calibrated to a flag rate printed the absolute band's explanation. Two
+    copies of a precedence rule is one copy too many.
+    """
+    if getattr(cfg, "target_review_count", None) is not None:
+        return "review_count"
+    if getattr(cfg, "target_flag_rate", None) is not None:
+        return "flag_rate"
+    if getattr(cfg, "band_abs", None) is not None:
+        return "absolute"
+    if getattr(cfg, "band_percentile", None) is not None:
+        return "percentile"
+    return "fixed"
+
+
 def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
               force: bool = False) -> list[dict]:
     """Fit and freeze every cell in `df`. Returns one result dict per cell."""
@@ -55,7 +87,8 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
                "band_path": None, "skipped": False, "reason": "",
                "curve_msg": "", "budget": None,
                "k_from_coverage": float("nan"), "k_floored": False,
-               "rule": None}
+               "rule": None, "band_abs": None,
+               "abs_k_lo": float("nan"), "abs_k_hi": float("nan")}
 
         if est["n"] == 0:
             # Distinct from "too few orders": the cell has rows, they just
@@ -76,24 +109,9 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
             results.append(row)
             continue
 
-        # Calibrate k to the wanted review load. The centre and the scale are
-        # unchanged -- only how many scales out the bound sits moves, so this
-        # is still mu +/- k*sigma and not a different method wearing its name.
-        #
-        # PRECEDENCE, most specific first:
-        #   target_review_count  -- a workload, in orders per cell per month
-        #   band_percentile      -- the SHIPPED rule: per side, the wider of
-        #                           mean +/- k*sigma and the empirical percentile
-        #   target_flag_rate     -- a two-sided coverage target, k solved
-        #   k_sigma              -- a plain fixed multiple
-        # This used to raise when the first two were both set, which was right
-        # while both were opt-in and wrong the moment coverage became the
-        # standing default in config.py: every single --target-review-count run
-        # would have collided with it. An explicit count is a deliberate
-        # override of the standard, and main() says so out loud rather than
-        # resolving it in silence.
         cell_cfg = cfg
-        if cfg.target_review_count is not None:
+        rule_name = active_rule(cfg)
+        if rule_name == "review_count":
             d_lo, d_hi = cells.date_range(g)
             sol = budget.solve(x, est[f"centre_{e}"], est[f"scale_{e}"],
                                per_month=cfg.target_review_count,
@@ -104,24 +122,11 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
             est = band.estimates(x, float(sol["k"]))
             lo, hi = est[f"lo_{e}"], est[f"hi_{e}"]
             row["lo"], row["hi"], row["k_used"] = lo, hi, float(sol["k"])
-        elif getattr(cfg, "band_percentile", None) is not None:
-            # The shipped rule: per side, the wider of the sigma term and the
-            # empirical percentile. k is NOT solved here -- the sigma term is
-            # literally centre + k*scale.
-            est, detail = band.apply_rule(est, x, k=cfg.k_sigma,
-                                          percentile=cfg.band_percentile)
-            lo, hi = est[f"lo_{e}"], est[f"hi_{e}"]
-            row["lo"], row["hi"] = lo, hi
-            row["rule"] = detail[e]
-        elif cfg.target_flag_rate is not None:
+        elif rule_name == "flag_rate":
             k_cov = normality.required_k(
                 x, est[f"centre_{e}"], est[f"scale_{e}"],
                 target_outside=cfg.target_flag_rate / 100.0)["k_symmetric"]
             if np.isfinite(k_cov) and k_cov > 0:
-                # The shipped rule: the WIDER of the two bounds. k_sigma is the
-                # floor here, not a fixed multiple -- a near-normal cell must
-                # not end up with a tighter band than a fat-tailed one just
-                # because its own tail happens to be thin.
                 # No floor here. An explicit coverage target is an
                 # instruction, and flooring it at the shipped band width would
                 # make --target-flag-rate silently inert the moment K_SIGMA
@@ -133,6 +138,29 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
                 est = band.estimates(x, float(k))
                 lo, hi = est[f"lo_{e}"], est[f"hi_{e}"]
                 row["lo"], row["hi"], row["k_used"] = lo, hi, float(k)
+        elif rule_name == "absolute":
+            # An absolute band: stated, not fitted. centre and scale are still
+            # computed -- scoring needs the scale to rank how far outside an
+            # order landed -- but they do not set the bounds.
+            a = float(cfg.band_abs)
+            lo, hi = -a, a
+            est = dict(est)
+            for _e in ("classical", "robust"):
+                est[f"lo_{_e}"], est[f"hi_{_e}"] = -a, a
+            row["lo"], row["hi"], row["band_abs"] = lo, hi, a
+            sc = est[f"scale_{e}"]
+            if np.isfinite(sc) and sc > 0:
+                row["abs_k_hi"] = (a - est[f"centre_{e}"]) / sc
+                row["abs_k_lo"] = (est[f"centre_{e}"] + a) / sc
+        elif rule_name == "percentile":
+            # The fitted rule: per side, the wider of the sigma term and the
+            # empirical percentile. k is NOT solved -- the sigma term is
+            # literally centre + k*scale.
+            est, detail = band.apply_rule(est, x, k=cfg.k_sigma,
+                                          percentile=cfg.band_percentile)
+            lo, hi = est[f"lo_{e}"], est[f"hi_{e}"]
+            row["lo"], row["hi"] = lo, hi
+            row["rule"] = detail[e]
 
         finite = x[np.isfinite(x)]
         flag_rate = (100.0 * float(np.mean((finite < lo) | (finite > hi)))
@@ -146,7 +174,8 @@ def fit_frame(df, cfg, *, bands_dir: str, out_dir: str, source_csv: str,
                      k_floor=(cfg.k_sigma
                               if cfg.target_flag_rate is not None else None),
                      k_from_coverage=row["k_from_coverage"],
-                     k_floored=row["k_floored"], rule=row["rule"])
+                     k_floored=row["k_floored"], rule=row["rule"],
+                     band_abs=row["band_abs"])
         row["band_path"] = path
 
         cell_out = cells.out_dir(out_dir, "fit", period, region, strategy)
@@ -209,17 +238,15 @@ def main():
         overrides["k_sigma"] = args.k
         overrides["target_flag_rate"] = None
         overrides["band_percentile"] = None
+        overrides["band_abs"] = None
     if args.estimator:
         overrides["estimator"] = args.estimator
     if args.target_flag_rate is not None:
         overrides["target_flag_rate"] = args.target_flag_rate
-        overrides["band_percentile"] = None
     if args.target_review_count is not None:
         # Same reason, plus: leaving the coverage default in place would trip
         # the mutually-exclusive guard on every single run of this flag.
         overrides["target_review_count"] = args.target_review_count
-        overrides["target_flag_rate"] = None
-        overrides["band_percentile"] = None
     if overrides:
         cfg = dataclasses.replace(cfg, **overrides)
 
@@ -230,17 +257,20 @@ def main():
     print("\n=== Cleaning ===")
     print(clean_report.as_text())
     units = t5cfg.units_of(cfg.metric)
-    if cfg.target_review_count is not None:
+    rule_name = active_rule(cfg)
+    if rule_name == "absolute":
+        k_desc = f"band = {-cfg.band_abs:g} .. {cfg.band_abs:g} {units} (absolute)"
+    elif rule_name == "review_count":
         k_desc = (f"k=solved per cell for {cfg.target_review_count:g} "
                   f"order(s)/month  (floor k={t5cfg.BUDGET_K_FLOOR:g})")
         if cfg.target_flag_rate is not None:
             print(f"\n  NOTE: a review count was given, so it overrides the "
                   f"{100.0 - cfg.target_flag_rate:g}% coverage")
             print("  standard in tier5/config.py for this run.")
-    elif getattr(cfg, "band_percentile", None) is not None:
+    elif rule_name == "percentile":
         k_desc = (f"band = MAX(mean +/- {cfg.k_sigma:g}*sigma, "
                   f"P{cfg.band_percentile:g}/P{100 - cfg.band_percentile:g})")
-    elif cfg.target_flag_rate is not None:
+    elif rule_name == "flag_rate":
         k_desc = (f"k=solved per cell for "
                   f"{100.0 - cfg.target_flag_rate:g}% coverage")
     else:
@@ -289,6 +319,13 @@ def main():
                     print(f"    THIN TAIL: {b.get('n_tail', 0)} order(s) is "
                           f"few to place a bound on. Fit a longer window, or "
                           f"raise the budget.")
+        elif r["band_abs"] is not None:
+            print(f"    BAND IS STATED, not fitted: "
+                  f"{-r['band_abs']:g} .. {r['band_abs']:g} {units}")
+            if np.isfinite(r["abs_k_hi"]):
+                print(f"    on this book that is {r['abs_k_lo']:.1f} sigma low "
+                      f"/ {r['abs_k_hi']:.1f} sigma high"
+                      f"   (sigma = {r['scale']:.2f} {units})")
         elif r["rule"] is not None:
             d = r["rule"]
             ks, pc = cfg.k_sigma, cfg.band_percentile
@@ -323,7 +360,18 @@ def main():
     n_skip = len(results) - n_ok
     print(f"\nFroze {n_ok} band(s) to {args.bands_dir}/"
           + (f", skipped {n_skip}." if n_skip else "."))
-    if cfg.target_review_count is not None:
+    if rule_name == "absolute":
+        a = cfg.band_abs
+        print(f"\n  The band is STATED: {-a:g} .. {a:g} {units}, set in "
+              f"tier5/config.py")
+        print("  (BAND_ABS_SPREADS). Nothing about it was estimated from this")
+        print("  book, which is the point: a fitted band widens when execution")
+        print("  gets worse, forgiving exactly the drift it exists to catch.")
+        print("\n  The centre and sigma above ARE measured, and the sigma")
+        print("  equivalent printed beside each band says how loose or tight this")
+        print("  policy is on that particular cell. Watch it across refits: if it")
+        print("  falls, the book is deteriorating underneath a fixed threshold.")
+    elif rule_name == "review_count":
         n = cfg.target_review_count
         print(f"\n  k was calibrated to {n:g} order(s) per cell per month, so the "
               f"in-sample")
@@ -334,7 +382,7 @@ def main():
               f"real")
         print("  change, and a run of empty months means the budget was set too")
         print("  tight to detect anything.")
-    elif getattr(cfg, "band_percentile", None) is not None:
+    elif rule_name == "percentile":
         ks, pc = cfg.k_sigma, cfg.band_percentile
         print(f"\n  Rule: hi = MAX(mean + {ks:g}*sigma, P{pc:g}),  "
               f"lo = MIN(mean - {ks:g}*sigma, P{100 - pc:g})")
@@ -344,7 +392,7 @@ def main():
         print("  the sigma term is doing the work and the net stands by unused.")
         print("\n  These rates are IN-SAMPLE. Run tier5.score on a later period")
         print("  for a number that measures rather than defines.")
-    elif cfg.target_flag_rate is not None:
+    elif rule_name == "flag_rate":
         cov = 100.0 - cfg.target_flag_rate
         print(f"\n  Standard: {cov:g}% coverage, set once in tier5/config.py "
               f"(COVERAGE_PCT).")
