@@ -57,15 +57,22 @@ def _band(tmp_path):
 # the setting
 # --------------------------------------------------------------------------
 
-def test_default_is_unchanged_k_three():
-    """Existing behaviour must not move just because the option exists."""
-    assert t5cfg.CONFIG.target_flag_rate is None
-    assert t5cfg.CONFIG.k_sigma == 3.0
+# CONFIG now carries the coverage standard (COVERAGE_PCT), so it is no longer
+# the plain fixed-k baseline these tests compare against. Name that explicitly
+# rather than letting "default" quietly mean two different things.
+FIXED_K = dataclasses.replace(t5cfg.CONFIG, target_flag_rate=None)
+
+
+def test_the_shipped_default_is_the_coverage_standard():
+    """The rule lives in config.py, not on the command line."""
+    assert t5cfg.CONFIG.target_flag_rate == pytest.approx(
+        100.0 - t5cfg.COVERAGE_PCT)
+    assert t5cfg.CONFIG.k_sigma == 3.0, "still the floor for a budgeted fit"
 
 
 def test_k_three_on_a_heavy_book_overshoots_badly(tmp_path):
     """The problem this option exists to solve, stated as a test."""
-    res = _fit(tmp_path, t5cfg.CONFIG)
+    res = _fit(tmp_path, FIXED_K)
     assert res[0]["flag_rate_pct"] > 4 * 100 * normality.NOMINAL_OUTSIDE
 
 
@@ -89,7 +96,7 @@ def test_the_band_widens_rather_than_narrows(tmp_path):
     """The boss's actual request: fewer orders outside."""
     wide = _fit(tmp_path / "a", dataclasses.replace(t5cfg.CONFIG,
                                                     target_flag_rate=0.5))
-    plain = _fit(tmp_path / "b", t5cfg.CONFIG)
+    plain = _fit(tmp_path / "b", FIXED_K)
     assert wide[0]["lo"] < plain[0]["lo"]
     assert wide[0]["hi"] > plain[0]["hi"]
 
@@ -119,7 +126,7 @@ def test_the_band_file_says_how_k_was_chosen(tmp_path):
 
 
 def test_a_fixed_k_says_so_too(tmp_path):
-    _fit(tmp_path, t5cfg.CONFIG)
+    _fit(tmp_path, FIXED_K)
     saved = _band(tmp_path)
     assert saved["k_source"] == "fixed"
     assert saved["target_flag_rate"] is None

@@ -215,6 +215,78 @@ circular — use `fit` + `score` for a number you can defend.
 
 ---
 
+## The standard: 99.9% coverage, set once
+
+**You do not pass anything on the command line.** The rule lives in
+`tier5/config.py`:
+
+```python
+COVERAGE_PCT = 99.9
+```
+
+Every run, every region, every strategy, every refit applies it. `k` is an
+**output**, printed beside the `k` a normal book would have needed:
+
+```
+$ python -m tier5.fit --csv orders.csv
+
+  metric=perf_in_spreads (spreads)  k=solved per cell for 99.9% coverage
+  HK / VWAP   n = 46,950
+    RANGE      -13.59 .. 12.87 spreads
+    k            4.97      <- what 99.9% coverage cost here  (3.29 if the book were normal)
+    an order must miss by 13.2 spreads to be flagged
+    in-sample flagged: 0.10%
+```
+
+### Why a coverage and not a sigma multiple
+
+They are the same statement **only under a normal distribution**. "3 sigma" and
+"99.73% coverage" are two ways of saying one thing; 99.9% is 3.29 sigma. Real
+execution books are not normal, so the two come apart — and only one of them
+survives the split:
+
+| you fix… | …and this floats | on a real HK VWAP book |
+|---|---|---|
+| the multiple at `k = 3` | the coverage | lands at **97.6%** — the threshold silently means something different in every cell |
+| the coverage at 99.9% | the multiple | came out at **4.97**, vs **3.29** if the book had been normal |
+
+The second is the systematic one. **The promise is what you defend; the
+multiple is only ever the means.** And the gap between those two `k` values —
+3.29 promised, 4.97 delivered — is this book's non-normality expressed as a
+single number, which is the shortest available answer to "why isn't it 3?"
+
+### Moving the whole desk
+
+Change one line. Nothing else needs editing and no command changes:
+
+| `COVERAGE_PCT` | k if normal | k on this book | band (spreads) | to review |
+|---|---|---|---|---|
+| 99.00 | 2.58 | 3.61 | −9.98 .. 9.27 | 39/month |
+| 99.73 ("3σ") | 3.00 | 4.44 | −12.19 .. 11.47 | 11/month |
+| **99.90** | **3.29** | **4.97** | **−13.59 .. 12.87** | **4/month** |
+| 99.95 | 3.48 | 5.27 | −14.40 .. 13.68 | 2/month |
+
+Every band file records what it was cut to, so `k = 4.97` is never somebody's
+guess a year from now:
+
+```json
+"k_sigma": 4.97, "k_source": "target_flag_rate",
+"coverage_pct": 99.9, "k_if_normal": 3.291
+```
+
+### Overriding it for one run
+
+Three flags, most specific first. Each switches the standard off for that run
+and says so:
+
+| flag | means |
+|---|---|
+| `--target-review-count N` | N orders per cell **per month**, volume-aware. `--k` becomes a floor. |
+| `--target-flag-rate PCT` | a different coverage, as its complement |
+| `--k K` | a fixed multiple, no solving |
+
+---
+
 ## Choosing `k` — or not choosing it at all
 
 `k = 3` is a promise: under a normal distribution 99.73% of orders fall inside,

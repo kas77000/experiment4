@@ -98,6 +98,14 @@ def save(est: dict, cfg, path: str, *, region: str, strategy: str,
                      if cfg.target_flag_rate is not None else "fixed"),
         "target_flag_rate": (float(cfg.target_flag_rate)
                              if cfg.target_flag_rate is not None else None),
+        # The standard this band was cut to, and the k a NORMAL book would
+        # have needed for the same promise. Stored together because the pair
+        # is the answer to "why isn't it 3?" a year from now, when nobody
+        # remembers what the tail looked like.
+        "coverage_pct": (round(100.0 - float(cfg.target_flag_rate), 10)
+                         if cfg.target_flag_rate is not None else None),
+        "k_if_normal": (normality.k_if_normal(100.0 - cfg.target_flag_rate)
+                        if cfg.target_flag_rate is not None else None),
         "target_review_count": (float(cfg.target_review_count)
                                 if getattr(cfg, "target_review_count", None)
                                 is not None else None),
