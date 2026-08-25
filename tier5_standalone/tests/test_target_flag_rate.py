@@ -64,6 +64,7 @@ def _band(tmp_path):
 # about what a FIXED multiple does to a heavy book, so the multiple has to be
 # pinned or the test silently starts measuring the current policy instead.
 FIXED_K = dataclasses.replace(t5cfg.CONFIG, band_percentile=None,
+                              band_abs=None,
                               target_flag_rate=None, k_sigma=3.0)
 
 
